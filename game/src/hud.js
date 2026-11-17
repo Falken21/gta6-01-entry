@@ -10,7 +10,7 @@ export function createHud() {
     speed: $('hud-speed'), timer: $('hud-timer'), flash: $('hud-flash'),
     banner: $('hud-banner'), bannerTitle: $('hud-banner-title'), bannerSub: $('hud-banner-sub'),
     minimap: $('minimap'), crosshair: $('crosshair'),
-    toast: $('hud-toast'),
+    toast: $('hud-toast'), bonus: $('hud-bonus'),
   };
   const mm = el.minimap.getContext('2d');
   let flashT = 0, toastT = 0;
@@ -95,6 +95,15 @@ export function createHud() {
       el.objective.textContent = 'Cerita selesai — jelajahi Costa Serena bebas.';
       el.objDist.textContent = '';
       el.timer.textContent = '';
+    }
+    // bonus objective (never blocks the mission; ✓/✗ only changes the payout)
+    const bon = G.missions.bonus;
+    if (bon && G.missions.state === 'active') {
+      el.bonus.textContent = G.missions.bonusText();
+      el.bonus.className = bon.failed ? 'failed' : bon.done ? 'done' : '';
+    } else {
+      el.bonus.textContent = '';
+      el.bonus.className = '';
     }
     // speed
     const sp = G.player.car ? Math.abs(G.player.car.speed) * 3.6 : Math.abs(G.player.speed) * 3.6;

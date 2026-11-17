@@ -32,6 +32,9 @@
   #hud-objective-box { position: absolute; top: 14px; left: 16px; padding: 10px 14px; max-width: 380px; }
   #hud-objective { font-size: 15px; font-weight: 600; line-height: 1.35; }
   #hud-obj-row { display: flex; gap: 12px; margin-top: 4px; font-size: 13px; color: var(--sun); }
+  #hud-bonus { margin-top: 5px; font-size: 13px; color: #ffd21a; line-height: 1.35; }
+  #hud-bonus.done { color: #7ee787; }
+  #hud-bonus.failed { color: #ff8a7a; text-decoration: line-through; }
   #hud-speed { position: absolute; right: 16px; bottom: 16px; font-size: 26px; font-weight: 700;
     text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
   #minimap { position: absolute; left: 16px; bottom: 16px; width: 168px; height: 168px;
@@ -88,6 +91,7 @@
   <div id="hud-objective-box" class="panel">
     <div id="hud-objective">—</div>
     <div id="hud-obj-row"><span id="hud-obj-dist"></span><span id="hud-timer"></span></div>
+    <div id="hud-bonus"></div>
   </div>
   <div id="hud-top-right">
     <div id="hud-stars">☆☆☆☆☆</div>
@@ -100,7 +104,7 @@
   <div id="hud-flash"></div>
   <div id="hud-banner"><div id="hud-banner-title"></div><div id="hud-banner-sub"></div></div>
   <div id="hud-toast"></div>
-  <div id="hud-help">WASD gerak / nyetir &nbsp;·&nbsp; E masuk-keluar mobil<br>Shift lari &nbsp;·&nbsp; Spasi rem tangan &nbsp;·&nbsp; F pukul<br>Klik tembak &nbsp;·&nbsp; N mulai misi &nbsp;·&nbsp; M bisu &nbsp;·&nbsp; Esc jeda</div>
+  <div id="hud-help">WASD gerak / nyetir &nbsp;·&nbsp; E masuk-keluar mobil<br>Shift lari &nbsp;·&nbsp; Spasi rem tangan &nbsp;·&nbsp; F pukul<br>Klik tembak &nbsp;·&nbsp; N mulai misi &nbsp;·&nbsp; R ganti radio<br>M bisu &nbsp;·&nbsp; Esc jeda</div>
 </div>
 
 <div id="screen-title" class="screen">
@@ -118,7 +122,7 @@
   <div class="controls">
     <span><b>WASD</b> gerak / nyetir</span><span><b>E</b> masuk mobil</span><span><b>Shift</b> lari</span>
     <span><b>Spasi</b> rem tangan</span><span><b>F</b> pukul</span><span><b>Klik</b> tembak</span>
-    <span><b>N</b> mulai misi</span><span><b>M</b> bisu</span><span><b>Esc</b> jeda</span>
+    <span><b>N</b> mulai misi</span><span><b>R</b> ganti radio</span><span><b>M</b> bisu</span><span><b>Esc</b> jeda</span>
     <span>Seret mouse untuk memutar kamera</span>
   </div>
 </div>

@@ -58,15 +58,21 @@ export function createPedestrians(scene, city, rng) {
       phase: rng.next() * 6,
       state: 'walk', // walk | wait | flee | down
       target: sidewalkPoint(),
-      waitT: 0, fleeT: 0, health: 100,
+      waitT: 0, fleeT: 0, fleeX: 0, fleeZ: 0, health: 100,
     });
   }
 
   function fleeFrom(ped, x, z) {
     const d = dist2D(ped.pos.x, ped.pos.z, x, z);
-    if (d < 14 && ped.state !== 'down') {
-      ped.state = 'flee'; ped.fleeT = 2.5;
-      ped.target = { x: ped.pos.x + (ped.pos.x - x) * 2, z: ped.pos.z + (ped.pos.z - z) * 2 };
+    if (d < 16 && ped.state !== 'down') {
+      ped.state = 'flee';
+      ped.fleeT = 2.5 + rng.next() * 1.5; // panic lasts 2.5–4s, re-triggered while danger stays near
+      ped.fleeX = x; ped.fleeZ = z; // remember the threat: keep running away from it
+      const k = 2.2;
+      ped.target = {
+        x: clamp(ped.pos.x + (ped.pos.x - x) * k, -CFG.world.halfX, CFG.world.beachX0 + 6),
+        z: clamp(ped.pos.z + (ped.pos.z - z) * k, -CFG.world.halfZ, CFG.world.halfZ),
+      };
     }
   }
 
@@ -90,7 +96,15 @@ export function createPedestrians(scene, city, rng) {
       const dx = ped.target.x - ped.pos.x, dz = ped.target.z - ped.pos.z;
       const dist = Math.hypot(dx, dz);
       if (dist < 1.2) {
-        if (ped.state === 'flee') { ped.state = 'walk'; ped.target = sidewalkPoint(); }
+        if (ped.state === 'flee') {
+          if (ped.fleeT > 0 && ped.fleeX !== undefined) {
+            // still panicking but reached the escape point: run further from the threat
+            ped.target = {
+              x: clamp(ped.pos.x + (ped.pos.x - ped.fleeX) * 2.2, -CFG.world.halfX, CFG.world.beachX0 + 6),
+              z: clamp(ped.pos.z + (ped.pos.z - ped.fleeZ) * 2.2, -CFG.world.halfZ, CFG.world.halfZ),
+            };
+          } else { ped.state = 'walk'; ped.target = sidewalkPoint(); }
+        }
         else if (rng.chance(0.25)) { ped.state = 'wait'; ped.waitT = 2 + rng.next() * 5; }
         else ped.target = sidewalkPoint();
         continue;
@@ -100,7 +114,7 @@ export function createPedestrians(scene, city, rng) {
       while (dh > Math.PI) dh -= Math.PI * 2;
       while (dh < -Math.PI) dh += Math.PI * 2;
       ped.heading += clamp(dh, -2.4 * dt, 2.4 * dt);
-      const sp = ped.state === 'flee' ? ped.speed * 2.6 : ped.speed;
+      const sp = ped.state === 'flee' ? ped.speed * 3.0 : ped.speed;
       ped.pos.x += Math.sin(ped.heading) * sp * dt;
       ped.pos.z += Math.cos(ped.heading) * sp * dt;
       for (const box of city.colliders) {

@@ -45,6 +45,9 @@ const peds = createPedestrians(scene, city, rng);
 const weather = createWeather(scene, rng);
 const audio = createAudio();
 const hud = createHud();
+audio.setRadioTrackCallback((name) => hud.toast(`Radio: ${name}`));
+// radio station per car type (track index into the audio module's stations)
+const RADIO_TRACK_BY_TYPE = { sedan: 0, taxi: 1, pickup: 2, police: 1 };
 const police = createPolice(scene, city, rng);
 const combat = createCombat();
 const missions = createMissions(scene, save);
@@ -101,9 +104,9 @@ function startGame(fresh) {
 }
 document.getElementById('btn-start').addEventListener('click', () => startGame(false));
 document.getElementById('btn-new').addEventListener('click', () => startGame(true));
-document.getElementById('btn-resume').addEventListener('click', () => { G.state = 'playing'; showScreen(null); audio.click(); });
+document.getElementById('btn-resume').addEventListener('click', () => { G.state = 'playing'; showScreen(null); audio.click(); audio.radioPause(false); });
 document.getElementById('btn-restart').addEventListener('click', () => { hideGameOver(); startGame(true); });
-document.getElementById('btn-title').addEventListener('click', () => { G.state = 'title'; showScreen('title'); });
+document.getElementById('btn-title').addEventListener('click', () => { G.state = 'title'; showScreen('title'); audio.radioStop(); });
 document.getElementById('btn-again').addEventListener('click', () => { hideGameOver(); startGame(true); });
 document.getElementById('btn-continue').addEventListener('click', () => { G.state = 'playing'; showScreen(null); });
 function hideGameOver() { screens.gameover.classList.add('hidden'); }
@@ -117,6 +120,7 @@ function gameOver(reason) {
     ? 'Polisi menangkapmu di jalan. Costa Serena tidak memberi ampun.'
     : 'Rafi tidak selamat. Coba lagi — kota ini masih menunggumu.';
   audio.fail();
+  audio.radioStop();
   showScreen('gameover');
 }
 
@@ -128,11 +132,15 @@ addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'KeyM') { const m = audio.toggleMute(); save.muted = m; writeSave(save); hud.toast(m ? 'Suara mati' : 'Suara hidup'); }
   if (e.code === 'Escape' || e.code === 'KeyP') {
-    if (G.state === 'playing') { G.state = 'paused'; showScreen('pause'); }
-    else if (G.state === 'paused') { G.state = 'playing'; showScreen(null); }
+    if (G.state === 'playing') { G.state = 'paused'; showScreen('pause'); audio.radioPause(true); }
+    else if (G.state === 'paused') { G.state = 'playing'; showScreen(null); audio.radioPause(false); }
   }
   if (G.state !== 'playing') return;
   if (e.code === 'KeyE') onInteract();
+  if (e.code === 'KeyR' && player.car) {
+    const name = audio.radioNext();
+    if (name) hud.toast(`Radio: ${name}`);
+  }
   if (e.code === 'KeyN') {
     if (missions.state === 'idle' || missions.state === 'failed' || missions.state === 'done') {
       const m = missions.start(rng);
@@ -186,6 +194,7 @@ function onInteract() {
   if (player.car) {
     exitCar(player);
     audio.click();
+    audio.radioStop();
     return;
   }
   const car = nearestCar(player, [...traffic.cars, ...traffic.parked, ...police.cars]);
@@ -197,6 +206,8 @@ function onInteract() {
     }
     enterCar(player, car);
     audio.click();
+    audio.radioStart(RADIO_TRACK_BY_TYPE[car.type] ?? 0);
+    hud.toast(`Radio: ${audio.radioTrack}`);
     if (wasPolice || car.type === 'police') police.addWanted(2, 'stole-police-car');
     else police.addWanted(1, 'car-theft');
     hud.flash('Mobil dicuri!');
@@ -265,7 +276,7 @@ function frame(dt) {
         }
       });
       audio.engine(clamp(Math.abs(car.speed) / CFG.car.maxSpeed, 0, 1), true);
-      // hitting a pedestrian while driving
+      // hitting a pedestrian while driving: bystanders nearby panic and flee
       for (const ped of peds.peds) {
         if (ped.state === 'down') continue;
         if (dist2D(car.pos.x, car.pos.z, ped.pos.x, ped.pos.z) < 1.6 && Math.abs(car.speed) > 3) {
@@ -274,6 +285,7 @@ function frame(dt) {
           police.addWanted(1, 'hit-ped');
           audio.thud(8);
           G.shake = 0.4;
+          for (const other of peds.peds) if (other !== ped) peds.fleeFrom(other, car.pos.x, car.pos.z);
         }
       }
     } else {
@@ -294,6 +306,8 @@ function frame(dt) {
     const danger = [];
     if (player.car && Math.abs(player.car.speed) > 6) danger.push({ x: player.car.pos.x, z: player.car.pos.z });
     for (const pc of police.cars) danger.push({ x: pc.pos.x, z: pc.pos.z });
+    // fast traffic is a threat too: peds scatter from cars speeding at them
+    for (const tc of traffic.cars) if (Math.abs(tc.speed) > 8) danger.push({ x: tc.pos.x, z: tc.pos.z });
     peds.update(dt, danger);
     police.update(dt, player, player.car, city,
       () => gameOver('busted'),

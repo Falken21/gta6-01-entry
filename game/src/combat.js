@@ -4,6 +4,19 @@ import * as THREE from 'three';
 import { CFG, clamp, dist2D } from './config.js';
 
 export function createCombat() {
+  // Make a pedestrian panic properly: flee state needs a timer and an
+  // escape target, otherwise the walker snaps back to its routine at once.
+  function setFlee(ped, fromX, fromZ) {
+    ped.state = 'flee';
+    ped.fleeT = 2.5 + Math.random() * 1.5;
+    ped.fleeX = fromX; ped.fleeZ = fromZ;
+    const dx = ped.pos.x - fromX, dz = ped.pos.z - fromZ;
+    const len = Math.hypot(dx, dz) || 1;
+    ped.target = {
+      x: Math.max(-CFG.world.halfX, Math.min(CFG.world.beachX0 + 6, ped.pos.x + (dx / len) * 26)),
+      z: Math.max(-CFG.world.halfZ, Math.min(CFG.world.halfZ, ped.pos.z + (dz / len) * 26)),
+    };
+  }
   return {
     ammo: 48,
     punchCooldown: 0,
@@ -27,7 +40,7 @@ export function createCombat() {
       if (hit) {
         hit.ped.health -= 40;
         if (hit.ped.health <= 0) { hit.ped.state = 'down'; hit.ped.model.group.rotation.x = -Math.PI / 2; hit.ped.model.group.position.y = 0.3; }
-        else hit.ped.state = 'flee';
+        else setFlee(hit.ped, player.pos.x, player.pos.z);
         onHit?.(hit);
         return true;
       }
@@ -60,7 +73,7 @@ export function createCombat() {
         if (hit.kind === 'ped') {
           hit.ped.health -= 50;
           if (hit.ped.health <= 0) { hit.ped.state = 'down'; hit.ped.model.group.rotation.x = -Math.PI / 2; hit.ped.model.group.position.y = 0.3; }
-          else hit.ped.state = 'flee';
+          else setFlee(hit.ped, player.pos.x, player.pos.z);
         } else {
           hit.car.damage = clamp(hit.car.damage + 0.15, 0, 1);
         }

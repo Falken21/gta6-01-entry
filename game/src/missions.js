@@ -37,6 +37,31 @@ const MISSION_DEFS = [
   },
 ];
 
+// Secondary (bonus) objectives: one per mission, picked at start. A bonus
+// NEVER blocks the main objective — failing it only forfeits the extra cash.
+const BONUS_POOL = {
+  m1: [
+    { id: 'no-damage', label: 'Tiba tanpa kerusakan', reward: 75 },
+    { id: 'no-wanted', label: 'Tanpa wanted naik', reward: 75 },
+  ],
+  m2: [
+    { id: 'no-damage', label: 'Paket sampai tanpa kerusakan', reward: 125 },
+    { id: 'speedy', label: 'Selesai dengan sisa waktu ≥ 20 dtk', reward: 125, threshold: 20 },
+  ],
+  m3: [
+    { id: 'no-damage', label: 'Kabur tanpa kerusakan', reward: 200 },
+    { id: 'speedy', label: 'Selesai dengan sisa waktu ≥ 30 dtk', reward: 200, threshold: 30 },
+  ],
+  m4: [
+    { id: 'drift', label: 'Drift total 2,5 dtk', reward: 300, threshold: 2.5 },
+    { id: 'speedy', label: 'Selesai dengan sisa waktu ≥ 25 dtk', reward: 300, threshold: 25 },
+  ],
+  m5: [
+    { id: 'no-damage', label: 'Perahu sampai tanpa kerusakan', reward: 500 },
+    { id: 'no-wanted', label: 'Tanpa wanted naik', reward: 500 },
+  ],
+};
+
 export function createMissions(scene, save) {
   const markerMat = new THREE.MeshBasicMaterial({ color: 0xffd21a, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
   const markerGeo = new THREE.CylinderGeometry(2.2, 2.2, 5, 20, 1, true);
@@ -68,6 +93,12 @@ export function createMissions(scene, save) {
   let raceStep = 0;
   let boatMode = false;
   let banner = null; // {text, sub, t} shown by HUD
+  // bonus tracking (baselines captured on the first active frame)
+  let bonus = null; // {id, label, reward, threshold, failed, done, progress}
+  let bonusInit = false;
+  let startWanted = 0;
+  let lastBonusCar = null, damageAtEnter = 0;
+  let driftT = 0, prevHeading = 0;
 
   function current() { return MISSION_DEFS[idx] ?? null; }
 
@@ -85,6 +116,12 @@ export function createMissions(scene, save) {
     timer = m.timer ?? 0;
     raceStep = 0;
     boatMode = false;
+    // pick one secondary objective for this run
+    const pool = BONUS_POOL[m.id] ?? [];
+    const pick = pool.length ? pool[Math.floor(rng.next() * pool.length)] : null;
+    bonus = pick ? { ...pick, failed: false, done: false, progress: 0 } : null;
+    bonusInit = false;
+    lastBonusCar = null; damageAtEnter = 0; driftT = 0; prevHeading = 0;
     if (m.race) setMarker(m.race[0][0], m.race[0][1]);
     else if (m.target) setMarker(m.target.x, m.target.z);
     banner = { text: m.name, sub: m.brief, t: 6 };
@@ -94,11 +131,23 @@ export function createMissions(scene, save) {
   function complete(player, onDone) {
     const m = current();
     if (!m) return;
+    let bonusCash = 0;
+    if (bonus && !bonus.failed) {
+      // 'speedy' is judged at the finish line from the time left
+      if (bonus.id === 'speedy') bonus.done = timer >= (bonus.threshold ?? 0);
+      // passive bonuses (no-damage / no-wanted) pay out when never failed;
+      // active ones (drift / speedy) only when their goal was reached
+      const earned = bonus.id === 'no-damage' || bonus.id === 'no-wanted' ? true : bonus.done;
+      if (earned) {
+        bonusCash = bonus.reward;
+        player.cash += bonusCash;
+      }
+    }
     player.cash += m.cash;
     idx += 1;
     state = 'done';
     hideMarker();
-    banner = { text: `Misi selesai: ${m.name}`, sub: `+$${m.cash} — ${idx >= MISSION_DEFS.length ? 'Cerita tamat. Costa Serena milikmu.' : 'Misi berikutnya tersedia.'}`, t: 6 };
+    banner = { text: `Misi selesai: ${m.name}`, sub: `+$${m.cash}${bonusCash ? ` + bonus $${bonusCash} (${bonus.label})` : ''} — ${idx >= MISSION_DEFS.length ? 'Cerita tamat. Costa Serena milikmu.' : 'Misi berikutnya tersedia.'}`, t: 6 };
     onDone?.(m);
   }
 
@@ -106,6 +155,42 @@ export function createMissions(scene, save) {
     state = 'failed';
     hideMarker();
     banner = { text: 'Misi gagal', sub: reason, t: 5 };
+  }
+
+  // One-line HUD text for the active bonus, with live status. Empty when none.
+  function bonusText() {
+    if (!bonus || state !== 'active') return '';
+    const status = bonus.failed ? ' ✗' : bonus.done ? ' ✓' : '';
+    const prog = bonus.id === 'drift' ? ` (${Math.min(driftT, bonus.threshold).toFixed(1)}/${bonus.threshold} dtk)` : '';
+    return `★ Bonus: ${bonus.label}${prog} — +$${bonus.reward}${status}`;
+  }
+
+  function updateBonus(dt, G) {
+    if (!bonus || state !== 'active') return;
+    if (!bonusInit) {
+      bonusInit = true;
+      startWanted = G.police.wanted;
+      prevHeading = G.player.car ? G.player.car.heading : G.player.heading;
+    }
+    if (bonus.failed) return;
+    const car = G.player.car;
+    if (bonus.id === 'no-damage') {
+      if (car) {
+        if (car !== lastBonusCar) { lastBonusCar = car; damageAtEnter = car.damage; }
+        if (car.damage > damageAtEnter + 0.02) bonus.failed = true;
+      } else lastBonusCar = null;
+    } else if (bonus.id === 'no-wanted') {
+      if (G.police.wanted > startWanted) bonus.failed = true;
+    } else if (bonus.id === 'drift' && car) {
+      const dh = car.heading - prevHeading;
+      const yawRate = Math.abs(((dh + Math.PI * 3) % (Math.PI * 2)) - Math.PI) / Math.max(dt, 1e-4);
+      if (yawRate > 0.6 && Math.abs(car.speed) > 12) {
+        driftT += dt;
+        bonus.progress = driftT;
+        if (driftT >= bonus.threshold) bonus.done = true;
+      }
+      prevHeading = car.heading;
+    }
   }
 
   function update(dt, G, rng) {
@@ -132,6 +217,7 @@ export function createMissions(scene, save) {
     if (state !== 'active') return;
     const m = current();
     if (!m) return;
+    updateBonus(dt, G);
     if (m.timer) {
       timer -= dt;
       if (timer <= 0) { fail('Waktu habis.'); return; }
@@ -168,6 +254,7 @@ export function createMissions(scene, save) {
 
   function reset(rng) {
     idx = 0; state = 'idle'; timer = 0; raceStep = 0; boatMode = false;
+    bonus = null; bonusInit = false; lastBonusCar = null; driftT = 0;
     hideMarker();
     for (const p of pickups) scene.remove(p.mesh);
     pickups.length = 0;
@@ -182,6 +269,8 @@ export function createMissions(scene, save) {
     get timer() { return timer; },
     get banner() { return banner; },
     get raceStep() { return raceStep; },
+    get bonus() { return bonus; },
+    bonusText,
     get raceTotal() { const m = current(); return m?.race ? m.race.length : 0; },
     get boatMode() { return boatMode; },
     clearBanner() { banner = null; },
