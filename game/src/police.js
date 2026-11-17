@@ -40,19 +40,25 @@ export function createPolice(scene, city, rng) {
   function update(dt, player, playerCar, city, onBusted, onCrash) {
     const px = playerCar ? playerCar.pos.x : player.pos.x;
     const pz = playerCar ? playerCar.pos.z : player.pos.z;
-    // desired police count scales with stars
+    // desired police count scales with stars (excluding a police car the
+    // player has stolen and is driving — it is no longer a pursuer)
+    const activeCars = cars.filter((c) => c.driver !== 'player');
     const wantCount = wanted === 0 ? 0 : Math.min(1 + Math.floor(wanted / 2), CFG.police.maxCars);
-    while (cars.length < wantCount) {
+    while (activeCars.length < wantCount) {
       if (!spawnCarNear(px, pz)) break;
+      activeCars.push(cars[cars.length - 1]);
     }
-    // remove extras when wanted drops
-    while (cars.length > wantCount) {
-      const c = cars.pop();
+    // remove extras when wanted drops (never the car the player drives)
+    while (activeCars.length > wantCount) {
+      const c = activeCars.pop();
+      const i = cars.indexOf(c);
+      if (i >= 0) cars.splice(i, 1);
       c.model.group.parent?.remove(c.model.group);
     }
-    // visibility: any police within 55m and roughly facing the player counts as seen
+    // visibility: any (non-stolen) police within 55m counts as seen
     let seen = false;
     for (const c of cars) {
+      if (c.driver === 'player') continue;
       if (dist2D(c.pos.x, c.pos.z, px, pz) < 55) { seen = true; break; }
     }
     if (seen) { unseenT = 0; decayT = 0; }
@@ -71,6 +77,7 @@ export function createPolice(scene, city, rng) {
 
     // pursuit: steer toward the player, ram when close; on foot, bust when adjacent
     for (const c of cars) {
+      if (c.driver === 'player') continue; // stolen: the player drives it now
       const dx = px - c.pos.x, dz = pz - c.pos.z;
       const d = Math.hypot(dx, dz);
       const wantHeading = Math.atan2(dx, dz);
