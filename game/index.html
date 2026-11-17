@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Costa Serena — game kriminal open-world</title>
+<style>
+  :root {
+    --sun: #ffd21a; --ink: #0c1118; --panel: rgba(10, 14, 20, 0.78);
+    --line: rgba(255, 255, 255, 0.14); --text: #f2ede2; --muted: #9aa4b0;
+    --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0c1118;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--text); }
+  #app, #app canvas { position: fixed; inset: 0; }
+  .hidden { display: none !important; }
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    backdrop-filter: blur(4px); }
+  #hud-top-right { position: absolute; top: 14px; right: 16px; display: flex; flex-direction: column;
+    align-items: flex-end; gap: 8px; }
+  #hud-stars { font-size: 26px; letter-spacing: 4px; color: var(--sun);
+    text-shadow: 0 2px 8px rgba(0,0,0,0.7); }
+  #hud-health { width: 190px; height: 12px; background: rgba(0,0,0,0.55); border-radius: 6px;
+    overflow: hidden; border: 1px solid var(--line); }
+  #hud-health-fill { height: 100%; width: 100%; background: #37c978; transition: width 200ms var(--ease-out); }
+  #hud-health-row { display: flex; align-items: center; gap: 8px; }
+  #hud-health-text { font-size: 12px; color: var(--muted); }
+  #hud-cash { font-size: 22px; font-weight: 700; color: #7ee787; text-shadow: 0 2px 8px rgba(0,0,0,0.7); }
+  #hud-objective-box { position: absolute; top: 14px; left: 16px; padding: 10px 14px; max-width: 380px; }
+  #hud-objective { font-size: 15px; font-weight: 600; line-height: 1.35; }
+  #hud-obj-row { display: flex; gap: 12px; margin-top: 4px; font-size: 13px; color: var(--sun); }
+  #hud-speed { position: absolute; right: 16px; bottom: 16px; font-size: 26px; font-weight: 700;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
+  #minimap { position: absolute; left: 16px; bottom: 16px; width: 168px; height: 168px;
+    border-radius: 50%; border: 2px solid rgba(255,255,255,0.35); box-shadow: 0 4px 18px rgba(0,0,0,0.5); }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+    opacity: 0.85; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff; }
+  #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+  #crosshair::after { left: 0; top: 8px; width: 18px; height: 2px; }
+  #hud-flash { position: absolute; left: 50%; top: 22%; transform: translateX(-50%);
+    font-size: 30px; font-weight: 800; color: var(--sun); text-shadow: 0 3px 12px rgba(0,0,0,0.8);
+    opacity: 0; transition: opacity 300ms var(--ease-out); }
+  #hud-toast { position: absolute; left: 50%; bottom: 110px; transform: translateX(-50%);
+    font-size: 14px; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+    padding: 8px 16px; border-radius: 20px; opacity: 0; transition: opacity 300ms var(--ease-out); }
+  #hud-banner { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); text-align: center;
+    opacity: 0; transition: opacity 400ms var(--ease-out); }
+  #hud-banner-title { font-size: 40px; font-weight: 800; letter-spacing: 1px;
+    text-shadow: 0 4px 18px rgba(0,0,0,0.85); }
+  #hud-banner-sub { font-size: 16px; color: #ffe9a8; margin-top: 6px; max-width: 560px;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.85); }
+  #hud-help { position: absolute; right: 16px; bottom: 56px; font-size: 12px; color: var(--muted);
+    text-align: right; line-height: 1.6; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+  /* ---------- screens ---------- */
+  .screen { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: linear-gradient(180deg, rgba(8,10,16,0.25) 0%, rgba(8,10,16,0.72) 78%); }
+  .kicker { font-size: 13px; letter-spacing: 5px; color: var(--sun); font-weight: 700; }
+  h1.title { font-size: 84px; font-weight: 900; letter-spacing: 2px; line-height: 1;
+    margin: 12px 0 6px; text-shadow: 0 6px 30px rgba(0,0,0,0.8); }
+  h1.title span { color: var(--sun); }
+  .subtitle { font-size: 18px; color: #ffe9a8; max-width: 620px; line-height: 1.5; }
+  .story { font-size: 15px; color: var(--text); max-width: 560px; line-height: 1.6; margin-top: 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 20px; }
+  .controls { display: flex; gap: 18px; margin-top: 18px; font-size: 13px; color: var(--muted); flex-wrap: wrap; justify-content: center; }
+  .controls b { color: var(--text); }
+  .btn { pointer-events: auto; cursor: pointer; margin-top: 22px; font-size: 18px; font-weight: 700;
+    color: var(--ink); background: var(--sun); border: none; border-radius: 10px; padding: 14px 34px;
+    transition: transform 150ms var(--ease-out), box-shadow 150ms var(--ease-out); }
+  .btn:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 10px 26px rgba(255,210,26,0.35); }
+  .btn:active { transform: scale(0.97); }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); box-shadow: none; }
+  .btn-row { display: flex; gap: 12px; }
+  #title-continue { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  h2.big { font-size: 56px; font-weight: 900; letter-spacing: 2px; text-shadow: 0 6px 30px rgba(0,0,0,0.8); }
+  h2.big.red { color: #ff5a4d; }
+  .screen p.sub { font-size: 16px; color: #d8d2c4; max-width: 520px; margin-top: 10px; line-height: 1.55; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud" class="hidden">
+  <div id="hud-objective-box" class="panel">
+    <div id="hud-objective">—</div>
+    <div id="hud-obj-row"><span id="hud-obj-dist"></span><span id="hud-timer"></span></div>
+  </div>
+  <div id="hud-top-right">
+    <div id="hud-stars">☆☆☆☆☆</div>
+    <div id="hud-health-row"><div id="hud-health"><div id="hud-health-fill"></div></div><span id="hud-health-text">100</span></div>
+    <div id="hud-cash">$0</div>
+  </div>
+  <canvas id="minimap" width="168" height="168"></canvas>
+  <div id="hud-speed"></div>
+  <div id="crosshair"></div>
+  <div id="hud-flash"></div>
+  <div id="hud-banner"><div id="hud-banner-title"></div><div id="hud-banner-sub"></div></div>
+  <div id="hud-toast"></div>
+  <div id="hud-help">WASD gerak / nyetir &nbsp;·&nbsp; E masuk-keluar mobil<br>Shift lari &nbsp;·&nbsp; Spasi rem tangan &nbsp;·&nbsp; F pukul<br>Klik tembak &nbsp;·&nbsp; N mulai misi &nbsp;·&nbsp; M bisu &nbsp;·&nbsp; Esc jeda</div>
+</div>
+
+<div id="screen-title" class="screen">
+  <div class="kicker">SEBUAH KOTA PANTAI YANG TAK PERNAH TIDUR</div>
+  <h1 class="title">COSTA <span>SERENA</span></h1>
+  <div class="subtitle">Game kriminal open-world — curi mobil, kabur dari polisi, selesaikan lima misi Rafi.</div>
+  <div class="story">Rafi, mekanik kapal berusia 27 tahun, pulang ke Costa Serena dan mendapati adiknya
+    Dimas berutang besar pada orang yang salah. Lima pekerjaan — dari antar paket sampai pelarian
+    terakhir dengan perahu — adalah satu-satunya jalan melunasi utang itu.</div>
+  <div class="btn-row">
+    <button id="btn-start" class="btn">Mulai</button>
+    <button id="btn-new" class="btn ghost">Cerita Baru</button>
+  </div>
+  <div id="title-continue"></div>
+  <div class="controls">
+    <span><b>WASD</b> gerak / nyetir</span><span><b>E</b> masuk mobil</span><span><b>Shift</b> lari</span>
+    <span><b>Spasi</b> rem tangan</span><span><b>F</b> pukul</span><span><b>Klik</b> tembak</span>
+    <span><b>N</b> mulai misi</span><span><b>M</b> bisu</span><span><b>Esc</b> jeda</span>
+    <span>Seret mouse untuk memutar kamera</span>
+  </div>
+</div>
+
+<div id="screen-pause" class="screen hidden">
+  <h2 class="big">JEDA</h2>
+  <p class="sub">Costa Serena menunggumu. Napas dulu, Rafi.</p>
+  <div class="btn-row">
+    <button id="btn-resume" class="btn">Lanjutkan</button>
+    <button id="btn-restart" class="btn ghost">Mulai Ulang</button>
+    <button id="btn-title" class="btn ghost">Menu Utama</button>
+  </div>
+</div>
+
+<div id="screen-gameover" class="screen hidden">
+  <h2 id="gameover-title" class="big red">TERTANGKAP!</h2>
+  <p id="gameover-sub" class="sub"></p>
+  <div class="btn-row">
+    <button id="btn-again" class="btn">Coba Lagi</button>
+    <button id="btn-title2" class="btn ghost" onclick="document.getElementById('screen-gameover').classList.add('hidden');document.getElementById('screen-title').classList.remove('hidden');">Menu Utama</button>
+  </div>
+</div>
+
+<div id="screen-complete" class="screen hidden">
+  <h2 class="big">UTANG LUNAS.</h2>
+  <p class="sub">Perahu Rafi menghilang ke cakrawala Costa Serena. Lima misi selesai — kota ini
+    sekarang milikmu untuk dijelajahi bebas.</p>
+  <div class="btn-row">
+    <button id="btn-continue" class="btn">Jelajahi Kota</button>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
