@@ -184,6 +184,8 @@ export function createMissions(scene, save) {
     get raceStep() { return raceStep; },
     get raceTotal() { const m = current(); return m?.race ? m.race.length : 0; },
     get boatMode() { return boatMode; },
+    clearBanner() { banner = null; },
+    hideMarker() { hideMarker(); },
     board(player, onDone) {
       if (!boatMode || current()?.id !== 'm5') return false;
       complete(player, onDone);

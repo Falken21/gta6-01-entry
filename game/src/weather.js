@@ -71,12 +71,12 @@ export function createWeather(scene, rng) {
     const fx = focus ? focus.x : 0, fz = focus ? focus.z : 0;
     sun.position.set(fx + sunDir.x * 220, sunDir.y * 220, fz + sunDir.z * 220);
     sun.target.position.set(fx, 0, fz);
-    const dayFactor = clamp(sunElev * 1.4 + 0.25, 0.08, 1);
+    const dayFactor = clamp(sunElev * 1.4 + 0.45, 0.3, 1);
     const warm = hour >= 16 && hour < 19.5;
     sun.color.setHex(warm ? 0xffb066 : 0xfff2dd);
-    sun.intensity = 2.8 * dayFactor * (rainAmt > 0.5 ? 0.45 : 1);
-    hemi.intensity = 0.75 * dayFactor + 0.12;
-    amb.intensity = 0.22 * dayFactor + 0.06;
+    sun.intensity = 3.0 * dayFactor * (rainAmt > 0.5 ? 0.5 : 1);
+    hemi.intensity = 0.9 * dayFactor + 0.18;
+    amb.intensity = 0.3 * dayFactor + 0.1;
 
     const sky = skyColor(hour);
     scene.background = sky;

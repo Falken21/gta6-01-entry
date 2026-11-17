@@ -12,7 +12,7 @@ function noiseSpeckle(ctx, w, h, rng, n, alpha, light) {
 
 export function asphaltTexture(rng) {
   const c = makeCanvas(256, 256), x = c.getContext('2d');
-  x.fillStyle = '#33363b'; x.fillRect(0, 0, 256, 256);
+  x.fillStyle = '#484b50'; x.fillRect(0, 0, 256, 256);
   noiseSpeckle(x, 256, 256, rng, 2600, 0.16, false);
   noiseSpeckle(x, 256, 256, rng, 900, 0.10, true);
   // wear patches / repairs

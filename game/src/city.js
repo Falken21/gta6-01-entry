@@ -108,11 +108,11 @@ export function buildCity(scene, rng) {
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14 * s, 0.22 * s, 5.5 * s, 6), trunkMat);
     trunk.position.y = 2.75 * s; trunk.castShadow = true; g.add(trunk);
     for (let i = 0; i < 7; i++) {
-      const leaf = new THREE.Mesh(new THREE.PlaneGeometry(2.6 * s, 0.7 * s), leafMat);
+      const leaf = new THREE.Mesh(new THREE.PlaneGeometry(2.2 * s, 0.6 * s), leafMat);
       const a = (i / 7) * Math.PI * 2;
-      leaf.position.set(Math.cos(a) * 1.1 * s, 5.6 * s, Math.sin(a) * 1.1 * s);
+      leaf.position.set(Math.cos(a) * 1.0 * s, 5.6 * s, Math.sin(a) * 1.0 * s);
       leaf.rotation.set(0.5, -a + Math.PI / 2, 0, 'YXZ');
-      leaf.rotation.x = -0.55; leaf.rotation.y = -a;
+      leaf.rotation.x = -0.95; leaf.rotation.y = -a;
       leaf.castShadow = true; g.add(leaf);
     }
     g.position.set(x, 0, z);
@@ -211,10 +211,16 @@ export function buildCity(scene, rng) {
   group.add(marinaWater);
 
   // --- plaza fountain near downtown ---
-  const fountain = new THREE.Mesh(new THREE.CylinderGeometry(5, 5.6, 0.8, 20), new THREE.MeshStandardMaterial({ color: 0x9a938a, roughness: 1 }));
+  const fountain = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.8, 0.8, 20), new THREE.MeshStandardMaterial({ color: 0x9a938a, roughness: 1 }));
   fountain.position.set(-20, 0.4, 0); fountain.castShadow = true; fountain.receiveShadow = true;
   group.add(fountain);
-  colliders.push({ minX: -25.6, maxX: -14.4, minZ: -5.6, maxZ: 5.6 });
+  const fountainWater = new THREE.Mesh(new THREE.CylinderGeometry(2.9, 2.9, 0.15, 20), new THREE.MeshStandardMaterial({ color: 0x2a7a9e, roughness: 0.15, metalness: 0.3 }));
+  fountainWater.position.set(-20, 0.85, 0);
+  group.add(fountainWater);
+  const fountainJet = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 1.6, 8), new THREE.MeshStandardMaterial({ color: 0x9fd8ee, roughness: 0.2, transparent: true, opacity: 0.75 }));
+  fountainJet.position.set(-20, 1.6, 0);
+  group.add(fountainJet);
+  colliders.push({ minX: -23.8, maxX: -16.2, minZ: -3.8, maxZ: 3.8 });
 
   return {
     group, colliders, nodes, adjacency, roadMeshes, asphalt, asphaltWet,

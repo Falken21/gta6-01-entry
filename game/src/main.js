@@ -30,7 +30,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.18;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.getElementById('app').appendChild(renderer.domElement);
 
@@ -351,46 +351,72 @@ function setupShot() {
     enterCar(player, car);
     car.speed = 22;
     police.setWanted(3, 'shot');
-    police.update(0.016, player, car, city, null, null);
-    // two police cars close behind
-    const p1 = createCar('police', 140, -52, 0, rng); p1.driver = 'police'; scene.add(p1.model.group); police.cars.push(p1);
-    const p2 = createCar('police', 136, -58, 0.2, rng); p2.driver = 'police'; scene.add(p2.model.group); police.cars.push(p2);
+    // two police cars close behind (placed, not random-spawned)
+    const p1 = createCar('police', 140, -37, 0, rng); p1.driver = 'police'; scene.add(p1.model.group); police.cars.push(p1);
+    const p2 = createCar('police', 135.5, -40.5, 0.15, rng); p2.driver = 'police'; scene.add(p2.model.group); police.cars.push(p2);
     for (const pc of police.cars) pc.model.setNight(false);
     player.pos.set(140, 0, -30);
-    G.camYaw = Math.PI; G.camPitch = 0.22;
-    camera.position.set(140, 4.5, -52);
+    G.camYaw = Math.PI * 0.85; G.camPitch = 0.28;
+    camera.position.set(135, 4.5, -20);
     missions.start(rng);
+    missions.clearBanner();
     hud.update(0.016, G);
   } else if (SHOT === 'walk') {
-    player.pos.set(-20, 0, 8);
-    player.heading = Math.PI * 0.9;
-    player.model.group.position.set(-20, 0, 8);
-    G.camYaw = Math.PI * 0.15; G.camPitch = 0.3;
-    camera.position.set(-20, 5, -6);
+    player.pos.set(-20, 0, 10);
+    player.heading = Math.PI;
+    player.model.group.position.set(-20, 0, 10);
+    player.model.group.rotation.y = Math.PI;
+    G.camYaw = Math.PI; G.camPitch = 0.26;
+    camera.position.set(-20, 5, 20);
+    const near = (x, z, heading) => {
+      const c = createCar('sedan', x, z, heading, rng);
+      c.driver = 'traffic'; c.speed = 9;
+      scene.add(c.model.group); traffic.cars.push(c);
+    };
+    near(-20, -24, 0); near(-20, 34, Math.PI); near(20, 14, Math.PI / 2);
+    for (let i = 0; i < 5; i++) {
+      const ped = peds.peds[i];
+      ped.pos.set(-26 + i * 3, 0, -8 - (i % 2) * 3);
+      ped.model.group.position.copy(ped.pos);
+      ped.state = 'walk'; ped.target = { x: -20 + i, z: -30 };
+    }
     missions.start(rng);
+    missions.clearBanner();
     hud.update(0.016, G);
   } else if (SHOT === 'coast') {
-    const car = putCar(140, 40, 0);
+    const car = putCar(140, 62, 0);
     enterCar(player, car);
     car.speed = 26;
-    player.pos.set(140, 0, 40);
-    G.camYaw = Math.PI; G.camPitch = 0.2;
-    camera.position.set(140, 4.5, 18);
+    player.pos.set(140, 0, 62);
+    G.camYaw = 0.08; G.camPitch = 0.2;
+    camera.position.set(140, 4.5, 51);
+    const near2 = (x, z, heading) => {
+      const c = createCar('sedan', x, z, heading, rng);
+      c.driver = 'traffic'; c.speed = 9;
+      scene.add(c.model.group); traffic.cars.push(c);
+    };
+    near2(140, 84, 0); near2(140, 38, Math.PI);
     missions.start(rng);
+    missions.clearBanner();
     hud.update(0.016, G);
   } else if (SHOT === 'night') {
-    const car = putCar(132, 90, Math.PI / 2);
+    // beachfront avenue at night in the rain: Rafi northbound, police closing
+    // in from behind, streetlights + lit windows + wet road.
+    const car = putCar(140, 60, 0);
     enterCar(player, car);
     car.speed = 12;
     police.setWanted(2, 'shot');
-    const p1 = createCar('police', 118, 90, Math.PI / 2, rng); p1.driver = 'police'; scene.add(p1.model.group); police.cars.push(p1);
+    const p1 = createCar('police', 140, 50, 0, rng); p1.driver = 'police'; scene.add(p1.model.group); police.cars.push(p1);
+    const p2 = createCar('police', 135.5, 46, 0.1, rng); p2.driver = 'police'; scene.add(p2.model.group); police.cars.push(p2);
     for (const pc of police.cars) pc.model.setNight(true);
-    player.pos.set(132, 0, 90);
-    G.camYaw = Math.PI * 0.5; G.camPitch = 0.24;
-    camera.position.set(118, 4.5, 78);
+    player.pos.set(140, 0, 60);
+    G.camYaw = Math.PI * 0.85; G.camPitch = 0.26;
+    camera.position.set(135, 4.5, 70);
     missions.start(rng);
+    missions.clearBanner();
     hud.update(0.016, G);
   }
+  missions.hideMarker();
   // one warm-up frame so shadows/water settle, then signal readiness
   frame(0.016);
   frame(0.016);
@@ -415,6 +441,7 @@ if (SHOT) {
   document.getElementById('title-continue').textContent =
     save.mission > 0 || save.cash > 0 ? `Lanjutkan — Misi ${save.mission + 1} • $${save.cash}` : 'Mulai Cerita Rafi';
   document.getElementById('btn-start').textContent = save.mission > 0 || save.cash > 0 ? 'Lanjutkan' : 'Mulai';
+  if (AUTO) startGame(false);
   requestAnimationFrame(loop);
 }
 window.__ready = true;

@@ -46,9 +46,9 @@ export function makeCarModel(type, colorHex, rng) {
   const coneMat = new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
   const cones = [];
   for (const sx of [-0.62, 0.62]) {
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.85, 7, 12, 1, true), coneMat.clone());
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.7, 5, 12, 1, true), coneMat.clone());
     cone.rotation.x = -Math.PI / 2 - 0.12;
-    cone.position.set(sx, 0.6, L / 2 + 3.4);
+    cone.position.set(sx, 0.6, L / 2 + 2.4);
     g.add(cone); cones.push(cone);
   }
   // wheels: spin + front steer
