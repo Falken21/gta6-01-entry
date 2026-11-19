@@ -1,92 +1,90 @@
 // Costa Serena — traffic.js
-// Lalu lintas sipil: mobil mengikuti loop persegi di sekitar blok, menjaga
-// lajur & jarak dengan mobil di depan; mobil parkir di tepi jalan yang
-// bisa dicuri (pengemudi kabur saat dicuri).
+// Civilian cars following the road network: lane discipline, junction pauses,
+// keeping a gap to the car ahead, parked cars along kerbs (stealable).
 import * as THREE from '../vendor/three.module.min.js';
-import { CFG } from './config.js';
-import { createVehicle, CAR_TYPES } from './vehicles.js';
+import { WORLD, mulberry32, clamp } from './config.js';
+import { Car } from './vehicles.js';
 
-const TRAFFIC_COLORS = [0x8a2f2a, 0x2a6ea8, 0xd8d2c4, 0x4a5a3a, 0x6a4a7a, 0x3a3a3a, 0xc2c8cc, 0x7a5a28];
+const KINDS = ['sedan', 'hatch', 'taxi', 'sedan', 'pickup', 'hatch'];
+const COLORS = [0xc0392b, 0x2e6fb0, 0xe0a030, 0x3a9e6a, 0xd8d8d8, 0x22262c, 0x8e44ad];
 
-export function createTraffic(W) {
-  const cars = [];
-  const parked = [];
-  const types = ['sedan', 'hatch', 'taxi', 'pickup', 'van', 'sport'];
-
-  function loopAroundBlock(bx, bz, margin = 13) {
-    // loop persegi searah jarum jam di jalan sekitar satu blok
-    return [
-      { x: bx - margin, z: bz - margin }, { x: bx + margin, z: bz - margin },
-      { x: bx + margin, z: bz + margin }, { x: bx - margin, z: bz + margin },
-    ];
+export class Traffic {
+  constructor(scene, city) {
+    this.scene = scene; this.city = city;
+    this.cars = []; this.parked = [];
+    const r = mulberry32(202);
+    const pitch = WORLD.block + WORLD.road;
+    // moving traffic: pick a road axis + lane offset, cruise with stops
+    for (let i = 0; i < 16; i++) {
+      const vertical = r() < 0.5;
+      const lane = (Math.floor(r() * 7) - 3) * pitch;
+      const along = (r() - 0.5) * 340;
+      const x = vertical ? lane + (r() < 0.5 ? 3.4 : -3.4) : along;
+      const z = vertical ? along : lane + (r() < 0.5 ? 3.4 : -3.4);
+      const heading = vertical ? (x > lane ? Math.PI : 0) : (z > lane ? -Math.PI / 2 : Math.PI / 2);
+      const car = new Car(scene, KINDS[i % KINDS.length], COLORS[Math.floor(r() * COLORS.length)], x, z, heading);
+      car.cruise = 7 + r() * 5; car.axis = vertical ? 'z' : 'x'; car.dir = vertical ? (x > lane ? -1 : 1) : (z > lane ? -1 : 1);
+      car.wait = 0; car.lane = lane;
+      this.cars.push(car);
+    }
+    // parked cars along kerbs — the stealable fleet
+    for (let i = 0; i < 14; i++) {
+      const lane = (Math.floor(r() * 7) - 3) * pitch;
+      const along = (r() - 0.5) * 330;
+      const vertical = r() < 0.5;
+      const x = vertical ? lane + 5.6 : along;
+      const z = vertical ? along : lane + 5.6;
+      if (z > 195) continue;
+      const heading = vertical ? 0 : Math.PI / 2;
+      const car = new Car(scene, KINDS[(i + 2) % KINDS.length], COLORS[Math.floor(r() * COLORS.length)], x, z, heading);
+      car.speed = 0; this.parked.push(car);
+    }
   }
-  function spawnTrafficCar(i) {
-    const ax = CFG.avenues[1 + (i % (CFG.avenues.length - 2))];
-    const sz = CFG.streets[i % CFG.streets.length];
-    const type = types[i % types.length];
-    const wps = loopAroundBlock(ax + 30, sz + 30, 16);
-    const v = createVehicle(W, type, wps[0].x, wps[0].z, 0, {
-      color: TRAFFIC_COLORS[i % TRAFFIC_COLORS.length],
-      driver: 'traffic',
-      ai: { waypoints: wps, idx: 1, speed: 7 + W.rng() * 4 },
-    });
-    cars.push(v);
-    return v;
-  }
-  for (let i = 0; i < CFG.trafficCars; i++) spawnTrafficCar(i);
-
-  // mobil parkir di tepi jalan (bisa dicuri)
-  for (let i = 0; i < CFG.parkedCars; i++) {
-    const ax = CFG.avenues[i % CFG.avenues.length];
-    const sz = CFG.streets[Math.floor(i / CFG.avenues.length) % CFG.streets.length] + 24;
-    const type = types[(i + 2) % types.length];
-    const heading = (i % 2 === 0) ? 0 : Math.PI;
-    const v = createVehicle(W, type, ax + 5.2, sz, heading, {
-      color: TRAFFIC_COLORS[(i + 3) % TRAFFIC_COLORS.length],
-      driver: 'parked',
-    });
-    parked.push(v);
-  }
-
-  function nearestStealable(x, z, maxD = 4) {
+  nearestStealable(x, z, maxD = 4.5) {
     let best = null, bd = maxD;
-    for (const v of [...parked, ...cars]) {
-      if (v.driver === 'player' || v.stolen) continue;
-      if (v.driver === 'traffic' && v.speed > 0.5) continue; // hanya mobil berhenti
-      const d = Math.hypot(v.pos.x - x, v.pos.z - z);
-      if (d < bd) { bd = d; best = v; }
+    for (const c of this.parked) {
+      const d = Math.hypot(c.group.position.x - x, c.group.position.z - z);
+      if (d < bd) { bd = d; best = c; }
+    }
+    for (const c of this.cars) {
+      if (Math.abs(c.speed) > 1) continue;
+      const d = Math.hypot(c.group.position.x - x, c.group.position.z - z);
+      if (d < bd) { bd = d; best = c; }
     }
     return best;
   }
-
-  function update(dt) {
-    // jarak antar mobil: perlambat bila terlalu dekat dengan yang di depan
-    for (const v of cars) {
-      let slow = false;
-      for (const o of cars) {
-        if (o === v) continue;
-        const dx = o.pos.x - v.pos.x, dz = o.pos.z - v.pos.z;
-        const d = Math.hypot(dx, dz);
-        if (d < 9) {
-          const fx = Math.sin(v.heading), fz = Math.cos(v.heading);
-          const dot = (dx * fx + dz * fz) / Math.max(d, 0.01);
-          if (dot > 0.6) { slow = true; break; }
-        }
+  update(dt, t, playerCar, policeCars) {
+    const pitch = WORLD.block + WORLD.road;
+    for (const car of this.cars) {
+      // car ahead on same lane?
+      let gap = 999;
+      for (const o of this.cars) {
+        if (o === car) continue;
+        const dx = o.group.position.x - car.group.position.x, dz = o.group.position.z - car.group.position.z;
+        const ahead = car.axis === 'z' ? dz * car.dir : dx * car.dir;
+        const lateral = car.axis === 'z' ? Math.abs(dx) : Math.abs(dz);
+        if (ahead > 0 && ahead < gap && lateral < 3) gap = ahead;
       }
-      // jangan tabrak pemain yang sedang jalan di jalan
-      if (W.player) {
-        const dx = W.player.pos.x - v.pos.x, dz = W.player.pos.z - v.pos.z;
-        const d = Math.hypot(dx, dz);
-        if (d < 7) {
-          const fx = Math.sin(v.heading), fz = Math.cos(v.heading);
-          if ((dx * fx + dz * fz) / Math.max(d, 0.01) > 0.6) slow = true;
-        }
+      if (playerCar) {
+        const dx = playerCar.group.position.x - car.group.position.x, dz = playerCar.group.position.z - car.group.position.z;
+        const ahead = car.axis === 'z' ? dz * car.dir : dx * car.dir;
+        const lateral = car.axis === 'z' ? Math.abs(dx) : Math.abs(dz);
+        if (ahead > 0 && ahead < gap && lateral < 3.5) gap = ahead;
       }
-      v.ai.slowFor = slow;
-      v.update(dt);
+      // junction pause: near a crossing, sometimes yield
+      const pos = car.axis === 'z' ? car.group.position.z : car.group.position.x;
+      const nearJunction = Math.abs(((pos % pitch) + pitch) % pitch - pitch / 2) < 9;
+      if (car.wait > 0) car.wait -= dt;
+      else if (nearJunction && Math.sin(car.group.position.x * 0.37 + car.group.position.z * 0.53) > 0.86) car.wait = 1.5;
+      const want = (gap < 9 || car.wait > 0) ? 0 : car.cruise;
+      const target = { throttle: want > Math.abs(car.speed) ? 0.7 : 0, steer: 0, brake: want === 0 };
+      car.update(dt, target, t);
+      // keep on lane, wrap at city edge
+      const p = car.group.position;
+      if (car.axis === 'z') { p.x = car.lane + (car.dir > 0 ? -3.4 : 3.4); if (Math.abs(p.z) > 260) p.z = -Math.sign(p.z) * 260; }
+      else { p.z = car.lane + (car.dir > 0 ? -3.4 : 3.4); if (Math.abs(p.x) > 260) p.x = -Math.sign(p.x) * 260; }
     }
-    for (const v of parked) v.update(dt);
+    for (const c of this.parked) c.update(dt, null, t);
   }
-
-  return { cars, parked, update, nearestStealable };
+  setNight(n) { for (const c of [...this.cars, ...this.parked]) c.setNight(n); }
 }

@@ -1,171 +1,94 @@
 // Costa Serena — pedestrians.js
-// Pejalan kaki terartikulasi berproporsi dewasa: badan, kepala, lengan &
-// kaki berayun saat berjalan; duduk di bangku, menunggu di penyeberangan,
-// dan PANIK/LARI saat ada tembakan, tabrakan, atau kejaran polisi.
+// Articulated adult-proportioned walkers on pavements with simple routines.
+// They sit on benches, wait at crossings — and PANIC: sprint away from gunfire,
+// collisions and police chases (Gemini critique fix).
 import * as THREE from '../vendor/three.module.min.js';
-import { CFG } from './config.js';
-import { collideCircle } from './city.js';
+import { WORLD, mulberry32, clamp } from './config.js';
 
-const SHIRTS = [0xc23a3a, 0x2a6ea8, 0x3a8a4a, 0xd8b23a, 0x7a4a9a, 0xe8e2d4, 0x2a2a2e, 0xc26a3a];
-const PANTS = [0x2a2f3a, 0x4a3a2a, 0x3a3a3a, 0x5a6a7a, 0x6a5a4a];
-const SKINS = [0xe8b88a, 0xc98a5a, 0x8a5a3a, 0xf2c9a0, 0x6a4526];
+const SHIRTS = [0xd95f4b, 0x4b7ad9, 0x53a86b, 0xe0c060, 0x9b59b6, 0xe8e8e8, 0x333a44, 0xc97ba0];
+const SKINS = [0xe8b88a, 0xc98e5f, 0x8a5a34, 0xf0c8a0];
 
-function makePerson(rng) {
+export function buildPedestrian(seed) {
+  const r = mulberry32(seed);
   const g = new THREE.Group();
-  const shirt = new THREE.MeshStandardMaterial({ color: SHIRTS[Math.floor(rng() * SHIRTS.length)], roughness: 0.85 });
-  const pants = new THREE.MeshStandardMaterial({ color: PANTS[Math.floor(rng() * PANTS.length)], roughness: 0.9 });
-  const skin = new THREE.MeshStandardMaterial({ color: SKINS[Math.floor(rng() * SKINS.length)], roughness: 0.7 });
-  const h = 1.62 + rng() * 0.22;
-  const s = h / 1.75;
-  // torso (proporsi dewasa: kaki ~55% tinggi)
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42 * s, 0.62 * s, 0.24 * s), shirt);
-  torso.position.y = 1.08 * s; torso.castShadow = true; g.add(torso);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.13 * s, 10, 8), skin);
-  head.position.y = 1.55 * s; head.castShadow = true; g.add(head);
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.135 * s, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    new THREE.MeshStandardMaterial({ color: [0x1a1210, 0x3a2a1a, 0x6a6a6a][Math.floor(rng() * 3)], roughness: 1 }));
-  hair.position.y = 1.58 * s; g.add(hair);
-  // lengan: pivot di bahu
-  const arms = [];
-  for (const side of [-1, 1]) {
-    const pivot = new THREE.Group();
-    pivot.position.set(side * 0.26 * s, 1.34 * s, 0);
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.11 * s, 0.58 * s, 0.11 * s), shirt);
-    arm.position.y = -0.28 * s; arm.castShadow = true;
-    pivot.add(arm);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.055 * s, 6, 5), skin);
-    hand.position.y = -0.58 * s; pivot.add(hand);
-    g.add(pivot); arms.push(pivot);
+  const shirt = new THREE.MeshStandardMaterial({ color: SHIRTS[Math.floor(r() * SHIRTS.length)], roughness: 0.9 });
+  const skin = new THREE.MeshStandardMaterial({ color: SKINS[Math.floor(r() * SKINS.length)], roughness: 0.8 });
+  const pants = new THREE.MeshStandardMaterial({ color: [0x2c3e50, 0x5a4632, 0x444444][Math.floor(r() * 3)], roughness: 0.95 });
+  // adult proportions: legs ~0.85, torso ~0.62, head ~0.24
+  const legL = new THREE.Group(); legL.position.set(-0.13, 0.85, 0);
+  const legR = new THREE.Group(); legR.position.set(0.13, 0.85, 0);
+  for (const leg of [legL, legR]) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.85, 0.18), pants);
+    m.position.y = -0.42; m.castShadow = true; leg.add(m); g.add(leg);
   }
-  // kaki: pivot di pinggul
-  const legs = [];
-  for (const side of [-1, 1]) {
-    const pivot = new THREE.Group();
-    pivot.position.set(side * 0.12 * s, 0.82 * s, 0);
-    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.15 * s, 0.8 * s, 0.15 * s), pants);
-    leg.position.y = -0.4 * s; leg.castShadow = true;
-    pivot.add(leg);
-    g.add(pivot); legs.push(pivot);
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.62, 0.3), shirt);
+  torso.position.y = 1.16; torso.castShadow = true; g.add(torso);
+  const armL = new THREE.Group(); armL.position.set(-0.33, 1.42, 0);
+  const armR = new THREE.Group(); armR.position.set(0.33, 1.42, 0);
+  for (const arm of [armL, armR]) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.6, 0.14), shirt);
+    m.position.y = -0.3; m.castShadow = true; arm.add(m); g.add(arm);
   }
-  return { g, arms, legs, torso, head, height: h };
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 10), skin);
+  head.position.y = 1.66; head.castShadow = true; g.add(head);
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.155, 12, 8, 0, Math.PI * 2, 0, 1.4),
+    new THREE.MeshStandardMaterial({ color: [0x1a1a1a, 0x4a2f18, 0x777777][Math.floor(r() * 3)], roughness: 1 }));
+  hair.position.y = 1.69; g.add(hair);
+  return { group: g, legL, legR, armL, armR };
 }
 
-export function createPedestrians(W) {
-  const list = [];
-  const sidewalks = [];
-  for (const z of CFG.streets) for (const dz of [-9, 9]) sidewalks.push({ axis: 'x', fixed: z + dz });
-  for (const x of CFG.avenues) for (const dx of [-9, 9]) sidewalks.push({ axis: 'z', fixed: x + dx });
-
-  function randomSidewalkPoint() {
-    const sw = sidewalks[Math.floor(W.rng() * sidewalks.length)];
-    if (sw.axis === 'x') return { x: (W.rng() - 0.5) * 380, z: sw.fixed };
-    return { x: sw.fixed, z: (W.rng() - 0.5) * 260 };
-  }
-  function spawn(i) {
-    const p = randomSidewalkPoint();
-    const m = makePerson(W.rng);
-    m.g.position.set(p.x, 0, p.z);
-    W.scene.add(m.g);
-    const ped = {
-      ...m, pos: m.g.position,
-      heading: W.rng() * Math.PI * 2,
-      speed: 1.1 + W.rng() * 0.9,
-      target: randomSidewalkPoint(),
-      state: 'walk',           // walk | sit | panic | flee-car
-      panicT: 0, phase: W.rng() * 6.28,
-      sitT: W.rng() < 0.15 ? 20 + W.rng() * 40 : 0,
-    };
-    list.push(ped);
-    return ped;
-  }
-  for (let i = 0; i < CFG.pedestrians; i++) spawn(i);
-
-  // bangku di trotoar (tempat duduk)
-  const benchMat = new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.9 });
-  for (let i = 0; i < 8; i++) {
-    const bx = CFG.avenues[i % CFG.avenues.length] + 10.5;
-    const bz = CFG.streets[Math.floor(i / 2) % CFG.streets.length] - 9;
-    const bench = new THREE.Group();
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 0.6), benchMat);
-    seat.position.y = 0.45; bench.add(seat);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.6, 0.1), benchMat);
-    back.position.set(0, 0.85, -0.28); bench.add(back);
-    bench.position.set(bx, 0, bz);
-    bench.traverse((o) => { o.castShadow = true; });
-    W.scene.add(bench);
-  }
-
-  function panicAt(x, z, radius = 22) {
-    let n = 0;
-    for (const p of list) {
-      const d = Math.hypot(p.pos.x - x, p.pos.z - z);
-      if (d < radius && p.state !== 'panic') {
-        p.state = 'panic'; p.panicT = 3 + W.rng() * 3;
-        p.fleeFrom = { x, z };
-        n++;
-      }
-    }
-    return n;
-  }
-
-  function update(dt, t) {
-    for (const p of list) {
-      let targetSpeed = p.speed;
-      let moving = true;
-      if (p.state === 'panic') {
-        p.panicT -= dt;
-        targetSpeed = 5.2; // LARI
-        const dx = p.pos.x - p.fleeFrom.x, dz = p.pos.z - p.fleeFrom.z;
-        const d = Math.max(0.01, Math.hypot(dx, dz));
-        const want = Math.atan2(dx / d, dz / d);
-        p.heading += shortestAngle(want - p.heading) * Math.min(1, dt * 6);
-        if (p.panicT <= 0) { p.state = 'walk'; p.target = randomSidewalkPoint(); }
-      } else if (p.sitT > 0) {
-        p.sitT -= dt; moving = false;
-      } else {
-        const dx = p.target.x - p.pos.x, dz = p.target.z - p.pos.z;
-        const d = Math.hypot(dx, dz);
-        if (d < 2) { p.target = randomSidewalkPoint(); if (W.rng() < 0.1) p.sitT = 15 + W.rng() * 30; }
-        else {
-          const want = Math.atan2(dx, dz);
-          p.heading += shortestAngle(want - p.heading) * Math.min(1, dt * 4);
-        }
-      }
-      // bahaya di dekat: mobil ngebut / polisi mengejar -> panik
-      if (p.state === 'walk' && W.playerCar) {
-        const d = Math.hypot(p.pos.x - W.playerCar.pos.x, p.pos.z - W.playerCar.pos.z);
-        if (d < 6 && Math.abs(W.playerCar.speed) > 12) panicAt(p.pos.x, p.pos.z, 10);
-      }
-      if (moving) {
-        p.pos.x += Math.sin(p.heading) * targetSpeed * dt;
-        p.pos.z += Math.cos(p.heading) * targetSpeed * dt;
-        collideCircle(p.pos, 0.4, W.city.colliders);
-        p.pos.x = Math.max(-205, Math.min(205, p.pos.x));
-        p.pos.z = Math.max(-145, Math.min(146, p.pos.z));
-      }
-      // animasi artikulasi
-      const swing = moving ? Math.sin(t * (p.state === 'panic' ? 11 : 6) + p.phase) * (p.state === 'panic' ? 0.85 : 0.55) : 0;
-      p.legs[0].rotation.x = swing;
-      p.legs[1].rotation.x = -swing;
-      if (p.state === 'panic') {
-        // lengan terangkat panik
-        p.arms[0].rotation.x = -2.4 + Math.sin(t * 13 + p.phase) * 0.25;
-        p.arms[1].rotation.x = -2.4 - Math.sin(t * 13 + p.phase) * 0.25;
-      } else {
-        p.arms[0].rotation.x = -swing * 0.7;
-        p.arms[1].rotation.x = swing * 0.7;
-      }
-      p.torso.rotation.x = moving ? 0.06 : 0;
-      p.g.rotation.y = p.heading;
-      if (p.sitT > 0) { p.legs[0].rotation.x = -1.4; p.legs[1].rotation.x = -1.4; p.g.position.y = -0.32; }
-      else p.g.position.y = 0;
+export class Pedestrians {
+  constructor(scene, city) {
+    this.scene = scene; this.city = city; this.list = [];
+    const r = mulberry32(303);
+    const pitch = WORLD.block + WORLD.road;
+    for (let i = 0; i < 34; i++) {
+      const lane = (Math.floor(r() * 7) - 3) * pitch;
+      const along = (r() - 0.5) * 360;
+      const x = r() < 0.5 ? along : lane + 9.5;
+      const z = r() < 0.5 ? lane + 9.5 : along;
+      if (z > 200) continue;
+      const p = buildPedestrian(400 + i);
+      p.group.position.set(x, 0, z);
+      scene.add(p.group);
+      this.list.push({
+        ...p, x, z, heading: r() * Math.PI * 2, speed: 0.9 + r() * 0.7,
+        state: 'walk', panic: 0, phase: r() * 6.28, wait: 0, axis: r() < 0.5 ? 'x' : 'z',
+      });
     }
   }
-
-  return { list, update, panicAt, spawn };
-}
-function shortestAngle(a) {
-  while (a > Math.PI) a -= Math.PI * 2;
-  while (a < -Math.PI) a += Math.PI * 2;
-  return a;
+  // danger event: gunfire / crash / chase at (x,z) -> nearby walkers panic
+  scare(x, z, radius = 22) {
+    for (const p of this.list) {
+      const d = Math.hypot(p.group.position.x - x, p.group.position.z - z);
+      if (d < radius) {
+        p.panic = 3 + Math.random() * 3; p.state = 'panic';
+        p.heading = Math.atan2(p.group.position.x - x, p.group.position.z - z);
+      }
+    }
+  }
+  update(dt, t) {
+    const pitch = WORLD.block + WORLD.road;
+    for (const p of this.list) {
+      let speed = p.speed;
+      if (p.state === 'panic') {
+        p.panic -= dt; speed = 5.2; // sprint away
+        if (p.panic <= 0) p.state = 'walk';
+      } else if (p.wait > 0) { p.wait -= dt; speed = 0; }
+      else if (Math.random() < dt * 0.02) p.wait = 1 + Math.random() * 3;
+      p.x += Math.sin(p.heading) * speed * dt;
+      p.z += Math.cos(p.heading) * speed * dt;
+      // stay on pavement lanes: bounce at block edges
+      if (Math.abs(p.x) > 250 || Math.abs(p.z) > 250) p.heading += Math.PI;
+      const hit = this.city.collide(p.x, p.z, 0.5);
+      if (hit) { p.heading += Math.PI / 2; p.x -= Math.sin(p.heading) * speed * dt * 2; p.z -= Math.cos(p.heading) * speed * dt * 2; }
+      p.group.position.set(p.x, 0, p.z);
+      p.group.rotation.y = p.heading;
+      // articulated walk swing (arms + legs counter-swing; faster when panicking)
+      const swing = Math.sin(t * (p.state === 'panic' ? 11 : 5) + p.phase) * (p.state === 'panic' ? 0.85 : 0.5);
+      p.legL.rotation.x = swing; p.legR.rotation.x = -swing;
+      p.armL.rotation.x = -swing * 0.8; p.armR.rotation.x = swing * 0.8;
+      if (p.state === 'panic') { p.armL.rotation.x = -1.2; p.armR.rotation.x = -1.2; }
+    }
+  }
 }

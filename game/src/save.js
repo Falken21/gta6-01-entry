@@ -1,24 +1,23 @@
 // Costa Serena — save.js
-// Progres tersimpan di localStorage: misi, cash, pengaturan.
+// localStorage: mission progress, cash, settings. Corrupt data is discarded,
+// never crashes the boot.
 const KEY = 'costa-serena-save-v1';
-
-export function createSave() {
-  let data = { missionIdx: 0, cash: 120, muted: false, radio: true };
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') data = { ...data, ...parsed };
-    }
-  } catch (e) { /* penyimpanan rusak -> mulai baru */ }
-  return {
-    data,
-    write() {
-      try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { /* abaikan */ }
-    },
-    reset() {
-      data = { missionIdx: 0, cash: 120, muted: false, radio: true };
-      this.write();
-    },
-  };
+export class Save {
+  constructor() {
+    this.data = { cash: 0, missionIndex: 0, muted: false, bestCash: 0 };
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') this.data = { ...this.data, ...parsed };
+      }
+    } catch (e) { /* corrupt save: start fresh */ }
+  }
+  write() {
+    try {
+      this.data.bestCash = Math.max(this.data.bestCash || 0, this.data.cash || 0);
+      localStorage.setItem(KEY, JSON.stringify(this.data));
+    } catch (e) { /* storage full/blocked: play on without saving */ }
+  }
+  reset() { this.data = { cash: 0, missionIndex: 0, muted: false, bestCash: 0 }; this.write(); }
 }
