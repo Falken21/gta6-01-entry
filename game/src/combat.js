@@ -1,85 +1,65 @@
-// Costa Serena — combat: melee punch and hitscan pistol. Shooting near people
-// makes them flee; hitting a cop or a bystander raises the wanted level.
+// Costa Serena — combat.js
+// One job: fighting. Hitscan pistol with a tracer and muzzle flash, a
+// melee shove, health, and the reactions a shot causes: peds panic, cops
+// and the wanted system notice, cars take damage and smoke.
 import * as THREE from 'three';
-import { CFG, clamp, dist2D } from './config.js';
+import { CFG, clamp } from './config.js';
 
-export function createCombat() {
-  // Make a pedestrian panic properly: flee state needs a timer and an
-  // escape target, otherwise the walker snaps back to its routine at once.
-  function setFlee(ped, fromX, fromZ) {
-    ped.state = 'flee';
-    ped.fleeT = 2.5 + Math.random() * 1.5;
-    ped.fleeX = fromX; ped.fleeZ = fromZ;
-    const dx = ped.pos.x - fromX, dz = ped.pos.z - fromZ;
-    const len = Math.hypot(dx, dz) || 1;
-    ped.target = {
-      x: Math.max(-CFG.world.halfX, Math.min(CFG.world.beachX0 + 6, ped.pos.x + (dx / len) * 26)),
-      z: Math.max(-CFG.world.halfZ, Math.min(CFG.world.halfZ, ped.pos.z + (dz / len) * 26)),
-    };
+export function createCombat(scene, camera) {
+  const raycaster = new THREE.Raycaster();
+  const tracerMat = new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.9 });
+  const tracerGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+  const tracer = new THREE.Line(tracerGeo, tracerMat);
+  tracer.visible = false;
+  scene.add(tracer);
+  const flash = new THREE.PointLight(0xffc36b, 0, 9, 1.6);
+  scene.add(flash);
+  let cooldown = 0;
+  let tracerTimer = 0;
+
+  function shoot(origin, dir, targets, onHit) {
+    // targets: [{ mesh-ish object3D, radius, pos, ref }] — raycast against
+    // invisible hit spheres is cheaper and stabler than mesh raycasts.
+    if (cooldown > 0) return null;
+    cooldown = CFG.pistolCooldown;
+    raycaster.set(origin, dir);
+    raycaster.far = CFG.pistolRange;
+    let best = null, bd = CFG.pistolRange;
+    for (const t of targets) {
+      const to = new THREE.Vector3().subVectors(t.pos, origin);
+      const along = to.dot(dir);
+      if (along < 0 || along > bd) continue;
+      const perp = to.clone().addScaledVector(dir, -along).length();
+      if (perp < t.radius) { best = t; bd = along; }
+    }
+    const end = origin.clone().addScaledVector(dir, bd);
+    tracerGeo.setFromPoints([origin.clone(), end]);
+    tracer.visible = true;
+    tracerTimer = 0.07;
+    flash.position.copy(origin).addScaledVector(dir, 1.2);
+    flash.intensity = 26;
+    if (best) onHit?.(best, end);
+    return best;
   }
-  return {
-    ammo: 48,
-    punchCooldown: 0,
-    shootCooldown: 0,
-    update(dt) {
-      this.punchCooldown = Math.max(0, this.punchCooldown - dt);
-      this.shootCooldown = Math.max(0, this.shootCooldown - dt);
-    },
-    // Melee: hits the nearest ped / police car within 2.2m in front.
-    punch(player, peds, policeCars, onHit) {
-      if (this.punchCooldown > 0 || !player.alive) return false;
-      this.punchCooldown = 0.45;
-      const fx = Math.sin(player.heading), fz = Math.cos(player.heading);
-      let hit = null, best = 2.4;
-      for (const ped of peds.peds) {
-        if (ped.state === 'down') continue;
-        const dx = ped.pos.x - player.pos.x, dz = ped.pos.z - player.pos.z;
-        const fwd = dx * fx + dz * fz;
-        if (fwd > 0 && fwd < best && Math.abs(dx * fz - dz * fx) < 1.0) { hit = { kind: 'ped', ped }; best = fwd; }
-      }
-      if (hit) {
-        hit.ped.health -= 40;
-        if (hit.ped.health <= 0) { hit.ped.state = 'down'; hit.ped.model.group.rotation.x = -Math.PI / 2; hit.ped.model.group.position.y = 0.3; }
-        else setFlee(hit.ped, player.pos.x, player.pos.z);
-        onHit?.(hit);
-        return true;
-      }
-      return false;
-    },
-    // Hitscan pistol from the camera through the crosshair point.
-    shoot(player, camera, peds, policeCars, onShot) {
-      if (this.shootCooldown > 0 || this.ammo <= 0 || !player.alive) return false;
-      this.shootCooldown = 0.28;
-      this.ammo -= 1;
-      const dir = new THREE.Vector3();
-      camera.getWorldDirection(dir);
-      const origin = camera.position.clone();
-      let hit = null, bestT = 120;
-      const testSphere = (x, y, z, r, ref) => {
-        const ox = x - origin.x, oy = y - origin.y, oz = z - origin.z;
-        const t = ox * dir.x + oy * dir.y + oz * dir.z;
-        if (t < 0 || t > bestT) return;
-        const cx = origin.x + dir.x * t, cy = origin.y + dir.y * t, cz = origin.z + dir.z * t;
-        if (Math.hypot(cx - x, cy - y, cz - z) < r) { bestT = t; hit = ref; }
-      };
-      for (const ped of peds.peds) {
-        if (ped.state === 'down') continue;
-        testSphere(ped.pos.x, 1.2, ped.pos.z, 0.8, { kind: 'ped', ped });
-      }
-      for (const c of policeCars) {
-        testSphere(c.pos.x, 1.0, c.pos.z, 1.8, { kind: 'police', car: c });
-      }
-      if (hit) {
-        if (hit.kind === 'ped') {
-          hit.ped.health -= 50;
-          if (hit.ped.health <= 0) { hit.ped.state = 'down'; hit.ped.model.group.rotation.x = -Math.PI / 2; hit.ped.model.group.position.y = 0.3; }
-          else setFlee(hit.ped, player.pos.x, player.pos.z);
-        } else {
-          hit.car.damage = clamp(hit.car.damage + 0.15, 0, 1);
-        }
-      }
-      onShot?.(hit, bestT);
-      return true;
-    },
-  };
+
+  function melee(origin, dir, targets, onHit) {
+    let best = null, bd = 2.4;
+    for (const t of targets) {
+      const d = t.pos.distanceTo(origin);
+      if (d < bd) { best = t; bd = d; }
+    }
+    if (best) onHit?.(best, best.pos);
+    return best;
+  }
+
+  function update(dt) {
+    cooldown = Math.max(0, cooldown - dt);
+    if (tracerTimer > 0) {
+      tracerTimer -= dt;
+      if (tracerTimer <= 0) tracer.visible = false;
+    }
+    flash.intensity = Math.max(0, flash.intensity - dt * 220);
+  }
+
+  return { shoot, melee, update, get ready() { return cooldown <= 0; } };
 }

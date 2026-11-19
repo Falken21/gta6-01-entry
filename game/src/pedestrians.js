@@ -1,139 +1,177 @@
-// Costa Serena — pedestrians: articulated low-poly walkers on the pavements,
-// with routines (walk, wait at crossings, sit on benches) and flee behaviour.
+// Costa Serena — pedestrians.js
+// One job: people on the pavements. Articulated low-poly figures (swinging
+// arms and legs, adult proportions, varied clothes) who walk routines,
+// wait at crossings, sit on benches — and PANIC: gunshots, collisions and
+// police chases nearby make them scream and run, arms up, away from danger.
 import * as THREE from 'three';
-import { CFG, makeRng, clamp, dist2D, resolveCircleAABB } from './config.js';
+import { CFG, clamp, mulberry32, pick, range } from './config.js';
 
-const SHIRTS = [0xd84a3a, 0x3a6fd8, 0xe8e2d0, 0x2a9d8f, 0xf4a261, 0x8d6b9e, 0x4a7a4f, 0xd8b13a];
-const PANTS = [0x2e3440, 0x4a3f35, 0x3a5a7a, 0x5a5a5a, 0x6b4a3a];
-const SKINS = [0xc98d64, 0x8a5a38, 0xe8b88a, 0x6b4226, 0xd8a075];
+const SKIN = [0xc98d64, 0x8a5a3b, 0xe8b88a, 0x6b4226, 0xd9a077];
+const SHIRTS = [0xd9552d, 0x2e6f8e, 0xd9a441, 0x4a7d5c, 0x8e4a6b, 0xe8e4da, 0x3a3f4a, 0x7fa08e];
+const PANTS = [0x2b3440, 0x4a3a2c, 0x5a5f6b, 0x1f2a33, 0x6b5a44];
 
-export function makePedModel(rng) {
+function makePerson(rng) {
   const g = new THREE.Group();
-  const shirt = new THREE.MeshStandardMaterial({ color: SHIRTS[Math.floor(rng.next() * SHIRTS.length)], roughness: 0.9 });
-  const pants = new THREE.MeshStandardMaterial({ color: PANTS[Math.floor(rng.next() * PANTS.length)], roughness: 0.95 });
-  const skin = new THREE.MeshStandardMaterial({ color: SKINS[Math.floor(rng.next() * SKINS.length)], roughness: 0.8 });
-  const hairMat = new THREE.MeshStandardMaterial({ color: rng.pick([0x1a1a1a, 0x4a2e1a, 0x8a8a8a, 0x2e1a0a]), roughness: 1 });
-
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.62, 0.3), shirt);
-  torso.position.y = 1.12; torso.castShadow = true; g.add(torso);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 8), skin);
-  head.position.y = 1.62; head.castShadow = true; g.add(head);
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
-  hair.position.y = 1.66; g.add(hair);
-  const mkLimb = (mat, w, h) => {
-    const pivot = new THREE.Group();
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), mat);
-    mesh.position.y = -h / 2; mesh.castShadow = true;
-    pivot.add(mesh);
-    return { pivot, mesh };
-  };
-  const armL = mkLimb(skin, 0.13, 0.55); armL.pivot.position.set(-0.33, 1.38, 0); g.add(armL.pivot);
-  const armR = mkLimb(skin, 0.13, 0.55); armR.pivot.position.set(0.33, 1.38, 0); g.add(armR.pivot);
-  const legL = mkLimb(pants, 0.16, 0.62); legL.pivot.position.set(-0.14, 0.82, 0); g.add(legL.pivot);
-  const legR = mkLimb(pants, 0.16, 0.62); legR.pivot.position.set(0.14, 0.82, 0); g.add(legR.pivot);
-  return { group: g, armL, armR, legL, legR, torso };
+  const skin = new THREE.MeshStandardMaterial({ color: pick(rng, SKIN), roughness: 0.8 });
+  const shirt = new THREE.MeshStandardMaterial({ color: pick(rng, SHIRTS), roughness: 0.9 });
+  const pants = new THREE.MeshStandardMaterial({ color: pick(rng, PANTS), roughness: 0.9 });
+  const h = range(rng, 1.62, 1.88);
+  const s = h / 1.75;
+  // legs
+  const legGeo = new THREE.BoxGeometry(0.16 * s, 0.78 * s, 0.18 * s);
+  const legL = new THREE.Mesh(legGeo, pants); legL.position.set(-0.11 * s, 0.39 * s, 0);
+  const legR = new THREE.Mesh(legGeo, pants); legR.position.set(0.11 * s, 0.39 * s, 0);
+  legL.geometry = legGeo.clone(); legR.geometry = legGeo.clone();
+  legL.geometry.translate(0, -0.39 * s, 0); legR.geometry.translate(0, -0.39 * s, 0);
+  legL.position.y = 0.78 * s; legR.position.y = 0.78 * s;
+  legL.castShadow = true; legR.castShadow = true;
+  // torso
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.46 * s, 0.58 * s, 0.26 * s), shirt);
+  torso.position.y = 0.78 * s + 0.29 * s;
+  torso.castShadow = true;
+  // arms
+  const armGeo = new THREE.BoxGeometry(0.12 * s, 0.56 * s, 0.14 * s);
+  armGeo.translate(0, -0.28 * s, 0);
+  const armL = new THREE.Mesh(armGeo, shirt); armL.position.set(-0.29 * s, 0.78 * s + 0.52 * s, 0);
+  const armR = new THREE.Mesh(armGeo, shirt); armR.position.set(0.29 * s, 0.78 * s + 0.52 * s, 0);
+  armL.castShadow = true; armR.castShadow = true;
+  // head + hair
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.13 * s, 10, 8), skin);
+  head.position.y = 0.78 * s + 0.58 * s + 0.14 * s;
+  head.castShadow = true;
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.135 * s, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    new THREE.MeshStandardMaterial({ color: pick(rng, [0x1a1a1a, 0x4a2c14, 0x8a6b3a, 0xd9d9d9, 0x2c2c2c]), roughness: 1 }));
+  hair.position.copy(head.position);
+  hair.position.y += 0.02;
+  g.add(legL, legR, torso, armL, armR, head, hair);
+  g.userData = { legL, legR, armL, armR, head, height: h };
+  return g;
 }
 
-export function createPedestrians(scene, city, rng) {
+export function createPedestrians(scene, city, seed = CFG.seed) {
+  const rng = mulberry32(seed + 202);
   const peds = [];
-  const R = CFG.roads;
-  function sidewalkPoint() {
-    // pick a road, then a point on its sidewalk
-    if (rng.chance(0.5)) {
-      const x = rng.pick(R.avenues) + (rng.chance(0.5) ? 1 : -1) * (R.width / 2 + 1.6);
-      return { x, z: rng.range(-R.streets[R.streets.length - 1] - 5, R.streets[R.streets.length - 1] + 5) };
-    }
-    const z = rng.pick(R.streets) + (rng.chance(0.5) ? 1 : -1) * (R.width / 2 + 1.6);
-    return { x: rng.range(-R.avenues[R.avenues.length - 1] - 5, R.avenues[R.avenues.length - 1] + 5), z };
+  const P = CFG.blockPitch;
+
+  function randomSidewalkPos() {
+    // Pick a road, stand on its pavement (7.5 m from the centre line).
+    const road = city.roads[Math.floor(rng() * city.roads.length)];
+    const t = range(rng, -200, 200);
+    const off = (rng() < 0.5 ? -1 : 1) * 7.6;
+    if (road.axis === 'x') return { x: t, z: road.line + off };
+    return { x: road.line + off, z: t };
   }
-  for (let i = 0; i < CFG.peds.count; i++) {
-    const p = sidewalkPoint();
-    const model = makePedModel(rng);
-    model.group.position.set(p.x, 0, p.z);
-    scene.add(model.group);
+
+  for (let i = 0; i < 26; i++) {
+    const p = randomSidewalkPos();
+    const model = makePerson(rng);
+    model.position.set(p.x, 0, p.z);
+    scene.add(model);
     peds.push({
-      model, pos: model.group.position,
-      heading: rng.next() * Math.PI * 2,
-      speed: 1.0 + rng.next() * 0.7,
-      phase: rng.next() * 6,
-      state: 'walk', // walk | wait | flee | down
-      target: sidewalkPoint(),
-      waitT: 0, fleeT: 0, fleeX: 0, fleeZ: 0, health: 100,
+      model,
+      pos: model.position,
+      heading: rng() * Math.PI * 2,
+      speed: range(rng, 0.9, 1.6),
+      walkPhase: rng() * Math.PI * 2,
+      state: 'walk',       // walk | wait | sit | panic | flee | down
+      stateTimer: range(rng, 4, 14),
+      panicTimer: 0,
+      health: 100,
+      target: randomSidewalkPos(),
+      update(dt, danger) {
+        // danger: {x, z, radius, kind} or null — gunfire, crashes, chases.
+        if (this.state !== 'down' && danger) {
+          const d = Math.hypot(this.pos.x - danger.x, this.pos.z - danger.z);
+          if (d < danger.radius) {
+            if (this.state !== 'panic') {
+              this.state = 'panic';
+              this.panicTimer = range(rng, 2.5, 5);
+              this.fleeX = this.pos.x + (this.pos.x - danger.x) / (d || 1) * 30;
+              this.fleeZ = this.pos.z + (this.pos.z - danger.z) / (d || 1) * 30;
+            }
+          }
+        }
+        let moveSpeed = 0;
+        if (this.state === 'panic') {
+          this.panicTimer -= dt;
+          const dx = this.fleeX - this.pos.x, dz = this.fleeZ - this.pos.z;
+          const d = Math.hypot(dx, dz) || 1;
+          this.heading = Math.atan2(dx, dz);
+          moveSpeed = 4.6;
+          this.pos.x += (dx / d) * moveSpeed * dt;
+          this.pos.z += (dz / d) * moveSpeed * dt;
+          if (this.panicTimer <= 0 || d < 1.5) { this.state = 'walk'; this.stateTimer = range(rng, 5, 12); }
+        } else if (this.state === 'walk') {
+          const dx = this.target.x - this.pos.x, dz = this.target.z - this.pos.z;
+          const d = Math.hypot(dx, dz);
+          if (d < 1.2) {
+            this.state = rng() < 0.3 ? 'wait' : 'walk';
+            this.stateTimer = range(rng, 3, 9);
+            if (this.state === 'walk') this.target = randomSidewalkPos();
+          } else {
+            this.heading = Math.atan2(dx, dz);
+            moveSpeed = this.speed;
+            this.pos.x += (dx / d) * moveSpeed * dt;
+            this.pos.z += (dz / d) * moveSpeed * dt;
+          }
+        } else if (this.state === 'wait') {
+          this.stateTimer -= dt;
+          if (this.stateTimer <= 0) { this.state = 'walk'; this.target = randomSidewalkPos(); }
+        }
+        // keep inside the city
+        this.pos.x = clamp(this.pos.x, -CFG.worldHalf, CFG.worldHalf);
+        this.pos.z = clamp(this.pos.z, -CFG.worldHalf, CFG.worldHalf);
+        // animate: legs + arms swing; panic throws arms up
+        const u = this.model.userData;
+        this.walkPhase += dt * (2 + moveSpeed * 2.4);
+        const swing = Math.sin(this.walkPhase) * clamp(moveSpeed / 2, 0, 1) * 0.7;
+        u.legL.rotation.x = swing;
+        u.legR.rotation.x = -swing;
+        if (this.state === 'panic') {
+          u.armL.rotation.x = -2.4 + Math.sin(this.walkPhase * 2) * 0.3;
+          u.armR.rotation.x = -2.4 - Math.sin(this.walkPhase * 2) * 0.3;
+          u.armL.rotation.z = 0.5; u.armR.rotation.z = -0.5;
+        } else {
+          u.armL.rotation.x = -swing * 0.8;
+          u.armR.rotation.x = swing * 0.8;
+          u.armL.rotation.z = 0.12; u.armR.rotation.z = -0.12;
+        }
+        this.model.rotation.y = this.heading;
+        this.model.position.y = this.state === 'down' ? -0.2 : Math.abs(Math.sin(this.walkPhase)) * 0.03 * clamp(moveSpeed, 0, 1);
+      },
+      hit(dmg, fromX, fromZ) {
+        this.health -= dmg;
+        if (this.health <= 0) {
+          this.state = 'down';
+          this.model.rotation.x = -Math.PI / 2;
+          this.model.position.y = 0.15;
+          return true;
+        }
+        // A wound sends them running too.
+        this.state = 'panic';
+        this.panicTimer = 4;
+        const d = Math.hypot(this.pos.x - fromX, this.pos.z - fromZ) || 1;
+        this.fleeX = this.pos.x + (this.pos.x - fromX) / d * 30;
+        this.fleeZ = this.pos.z + (this.pos.z - fromZ) / d * 30;
+        return false;
+      },
+      revive() {
+        this.health = 100; this.state = 'walk';
+        this.model.rotation.x = 0;
+        this.target = randomSidewalkPos();
+      },
     });
   }
 
-  function fleeFrom(ped, x, z) {
-    const d = dist2D(ped.pos.x, ped.pos.z, x, z);
-    if (d < 16 && ped.state !== 'down') {
-      ped.state = 'flee';
-      ped.fleeT = 2.5 + rng.next() * 1.5; // panic lasts 2.5–4s, re-triggered while danger stays near
-      ped.fleeX = x; ped.fleeZ = z; // remember the threat: keep running away from it
-      const k = 2.2;
-      ped.target = {
-        x: clamp(ped.pos.x + (ped.pos.x - x) * k, -CFG.world.halfX, CFG.world.beachX0 + 6),
-        z: clamp(ped.pos.z + (ped.pos.z - z) * k, -CFG.world.halfZ, CFG.world.halfZ),
-      };
+  function nearest(x, z, maxDist = 3) {
+    let best = null, bd = maxDist;
+    for (const p of peds) {
+      if (p.state === 'down') continue;
+      const d = Math.hypot(p.pos.x - x, p.pos.z - z);
+      if (d < bd) { bd = d; best = p; }
     }
+    return best;
   }
 
-  function update(dt, danger) {
-    for (const ped of peds) {
-      if (ped.state === 'down') continue;
-      if (danger) {
-        for (const d of danger) fleeFrom(ped, d.x, d.z);
-      }
-      if (ped.state === 'flee') {
-        ped.fleeT -= dt;
-        if (ped.fleeT <= 0) { ped.state = 'walk'; ped.target = sidewalkPoint(); }
-      }
-      if (ped.state === 'wait') {
-        ped.waitT -= dt;
-        if (ped.waitT <= 0) { ped.state = 'walk'; ped.target = sidewalkPoint(); }
-        ped.model.armL.pivot.rotation.x = 0; ped.model.armR.pivot.rotation.x = 0;
-        ped.model.legL.pivot.rotation.x = 0; ped.model.legR.pivot.rotation.x = 0;
-        continue;
-      }
-      const dx = ped.target.x - ped.pos.x, dz = ped.target.z - ped.pos.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 1.2) {
-        if (ped.state === 'flee') {
-          if (ped.fleeT > 0 && ped.fleeX !== undefined) {
-            // still panicking but reached the escape point: run further from the threat
-            ped.target = {
-              x: clamp(ped.pos.x + (ped.pos.x - ped.fleeX) * 2.2, -CFG.world.halfX, CFG.world.beachX0 + 6),
-              z: clamp(ped.pos.z + (ped.pos.z - ped.fleeZ) * 2.2, -CFG.world.halfZ, CFG.world.halfZ),
-            };
-          } else { ped.state = 'walk'; ped.target = sidewalkPoint(); }
-        }
-        else if (rng.chance(0.25)) { ped.state = 'wait'; ped.waitT = 2 + rng.next() * 5; }
-        else ped.target = sidewalkPoint();
-        continue;
-      }
-      const want = Math.atan2(dx, dz);
-      let dh = want - ped.heading;
-      while (dh > Math.PI) dh -= Math.PI * 2;
-      while (dh < -Math.PI) dh += Math.PI * 2;
-      ped.heading += clamp(dh, -2.4 * dt, 2.4 * dt);
-      const sp = ped.state === 'flee' ? ped.speed * 3.0 : ped.speed;
-      ped.pos.x += Math.sin(ped.heading) * sp * dt;
-      ped.pos.z += Math.cos(ped.heading) * sp * dt;
-      for (const box of city.colliders) {
-        const res = resolveCircleAABB(ped.pos.x, ped.pos.z, 0.4, box);
-        if (res) { ped.pos.x += res.x; ped.pos.z += res.z; ped.target = sidewalkPoint(); }
-      }
-      ped.pos.x = clamp(ped.pos.x, -CFG.world.halfX, CFG.world.beachX0 + 6);
-      ped.pos.z = clamp(ped.pos.z, -CFG.world.halfZ, CFG.world.halfZ);
-      // walk cycle: arms and legs swing in opposition
-      ped.phase += dt * sp * 3.4;
-      const s = Math.sin(ped.phase) * (ped.state === 'flee' ? 0.85 : 0.55);
-      ped.model.legL.pivot.rotation.x = s;
-      ped.model.legR.pivot.rotation.x = -s;
-      ped.model.armL.pivot.rotation.x = -s * 0.8;
-      ped.model.armR.pivot.rotation.x = s * 0.8;
-      ped.model.group.rotation.y = ped.heading;
-      ped.model.group.position.y = Math.abs(Math.sin(ped.phase)) * 0.04;
-    }
-  }
-
-  return { peds, update, fleeFrom };
+  return { peds, nearest };
 }

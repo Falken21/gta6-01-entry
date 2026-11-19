@@ -1,40 +1,40 @@
-// Costa Serena — save: mission progress, cash and settings in localStorage.
-// Corrupt or out-of-range saves are discarded, never trusted (defect review).
+// Costa Serena — save.js
+// One job: persistence. Mission progress, cash, best times and settings
+// survive between sessions in localStorage; a corrupt save never blocks
+// the game — it falls back to a fresh start.
 const KEY = 'costa-serena-save-v1';
 
 export function loadSave() {
-  const fresh = { mission: 0, cash: 0, muted: false, best: 0 };
+  const fresh = { cash: 0, unlocked: 1, completed: [], bestTimes: {}, muted: false, radio: true };
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return fresh;
     const data = JSON.parse(raw);
     if (!data || typeof data !== 'object') return fresh;
     return {
-      mission: Number.isInteger(data.mission) && data.mission >= 0 && data.mission <= 5 ? data.mission : 0,
-      cash: Number.isFinite(data.cash) && data.cash >= 0 && data.cash < 1000000 ? Math.floor(data.cash) : 0,
-      muted: data.muted === true,
-      best: Number.isFinite(data.best) && data.best >= 0 ? data.best : 0,
+      cash: typeof data.cash === 'number' ? data.cash : 0,
+      unlocked: typeof data.unlocked === 'number' ? data.unlocked : 1,
+      completed: Array.isArray(data.completed) ? data.completed : [],
+      bestTimes: data.bestTimes && typeof data.bestTimes === 'object' ? data.bestTimes : {},
+      muted: !!data.muted,
+      radio: data.radio !== false,
     };
-  } catch (e) {
+  } catch {
     return fresh;
   }
 }
 
-export function writeSave(save) {
+export function storeSave(save) {
   try {
-    const safe = {
-      mission: Math.max(0, Math.min(5, save.mission | 0)),
-      cash: Math.max(0, Math.min(999999, Math.floor(save.cash) || 0)),
-      muted: save.muted === true,
-      best: Math.max(0, save.best | 0),
-    };
-    localStorage.setItem(KEY, JSON.stringify(safe));
-    return true;
-  } catch (e) {
-    return false;
+    localStorage.setItem(KEY, JSON.stringify({
+      cash: save.cash || 0,
+      unlocked: save.unlocked || 1,
+      completed: save.completed || [],
+      bestTimes: save.bestTimes || {},
+      muted: !!save.muted,
+      radio: save.radio !== false,
+    }));
+  } catch {
+    // Storage full or blocked: the game keeps running without saving.
   }
-}
-
-export function clearSave() {
-  try { localStorage.removeItem(KEY); } catch (e) { /* storage unavailable */ }
 }

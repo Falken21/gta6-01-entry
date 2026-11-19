@@ -1,122 +1,115 @@
-// Costa Serena — wanted system and police pursuit.
-// Stars 1-5: crimes raise them, hiding drains them. Police cars spawn at the
-// road edges, pursue with ramming behaviour, and bust Rafi on foot when close.
-import { CFG, clamp, damp, dist2D, angDiff, makeRng } from './config.js';
-import { createCar, updateCar } from './vehicles.js';
+// Costa Serena — police.js
+// One job: the wanted system. Crimes raise stars (1–5); police cars spawn
+// at the city's edges and pursue with ramming and pinning behaviour; break
+// line of sight and the heat cools until the stars drain. Light bars flash
+// red/blue and throw coloured pools on the road at night.
+import * as THREE from 'three';
+import { CFG, clamp, angleDiff, mulberry32, pick, range } from './config.js';
+import { createCar } from './vehicles.js';
 
-export function createPolice(scene, city, rng) {
+export function createPolice(scene, city, seed = CFG.seed) {
+  const rng = mulberry32(seed + 404);
   const cars = [];
-  let wanted = 0;
-  let heat = 0; // 0..1, how "hot" the pursuit is
-  let unseenT = 0; // seconds since any police could see the player
-  let decayT = 0;
-  let sirenOn = false;
+  let wanted = 0;            // float 0..5; HUD shows ceil
+  let lastCrimeAt = -999;
+  let time = 0;
+  let flashPhase = 0;
 
-  function spawnCarNear(px, pz) {
-    // pick a road point 60-90m away, on a road
+  function stars() { return Math.ceil(wanted - 0.001); }
+
+  function addCrime(level, x, z) {
+    wanted = clamp(wanted + level, 0, CFG.wantedMax);
+    lastCrimeAt = time;
+  }
+
+  function spawnPoliceCar(targetPos) {
+    // Spawn on a road 60–90 m away, roughly behind the player's motion.
+    const road = city.roads[Math.floor(rng() * city.roads.length)];
+    let best = null, bd = 1e9;
     for (let tries = 0; tries < 12; tries++) {
-      const x = CFG.roads.avenues[Math.floor(rng.next() * CFG.roads.avenues.length)];
-      const z = CFG.roads.streets[Math.floor(rng.next() * CFG.roads.streets.length)];
-      if (dist2D(x, z, px, pz) < CFG.police.spawnDist) continue;
-      if (dist2D(x, z, px, pz) > 130) continue;
-      const car = createCar('police', x, z, Math.atan2(px - x, pz - z), rng);
-      car.driver = 'police';
-      car.speed = 12;
-      scene.add(car.model.group);
-      cars.push(car);
-      return car;
+      const t = range(rng, -200, 200);
+      const p = road.axis === 'x' ? { x: t, z: road.line } : { x: road.line, z: t };
+      const d = Math.hypot(p.x - targetPos.x, p.z - targetPos.z);
+      if (d > 60 && d < bd) { bd = d; best = p; }
     }
-    return null;
+    if (!best) best = { x: targetPos.x + 70, z: targetPos.z };
+    const near = city.nearestRoad(best.x, best.z);
+    const car = createCar(scene, 'police', near.x, near.z,
+      Math.atan2(targetPos.x - near.x, targetPos.z - near.z), 0x1c1f24, rng);
+    car.driver = 'police';
+    // fake red/blue light pools on the road
+    const poolGeo = new THREE.CircleGeometry(3.2, 16);
+    const redPool = new THREE.Mesh(poolGeo, new THREE.MeshBasicMaterial({
+      color: 0xff2222, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    const bluePool = new THREE.Mesh(poolGeo, new THREE.MeshBasicMaterial({
+      color: 0x2244ff, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    redPool.rotation.x = -Math.PI / 2; bluePool.rotation.x = -Math.PI / 2;
+    redPool.position.y = 0.05; bluePool.position.y = 0.05;
+    car.model.add(redPool); car.model.add(bluePool);
+    car.pools = { red: redPool.material, blue: bluePool.material };
+    cars.push(car);
+    return car;
   }
 
-  function setWanted(n, reason) {
-    const before = wanted;
-    wanted = clamp(n, 0, 5);
-    if (wanted > before) { unseenT = 0; decayT = 0; }
-    return wanted;
-  }
-  function addWanted(n, reason) { return setWanted(wanted + n, reason); }
-
-  function update(dt, player, playerCar, city, onBusted, onCrash) {
-    const px = playerCar ? playerCar.pos.x : player.pos.x;
-    const pz = playerCar ? playerCar.pos.z : player.pos.z;
-    // desired police count scales with stars (excluding a police car the
-    // player has stolen and is driving — it is no longer a pursuer)
-    const activeCars = cars.filter((c) => c.driver !== 'player');
-    const wantCount = wanted === 0 ? 0 : Math.min(1 + Math.floor(wanted / 2), CFG.police.maxCars);
-    while (activeCars.length < wantCount) {
-      if (!spawnCarNear(px, pz)) break;
-      activeCars.push(cars[cars.length - 1]);
+  function update(dt, player, playerCar, onRam) {
+    time += dt;
+    flashPhase += dt * 9;
+    const target = playerCar || player;
+    const tx = target.pos.x, tz = target.pos.z;
+    // keep the fleet sized to the wanted level
+    const want = stars();
+    while (cars.length < want && cars.length < 5) spawnPoliceCar(target.pos);
+    while (cars.length > want) {
+      const c = cars.pop();
+      c.destroy();
     }
-    // remove extras when wanted drops (never the car the player drives)
-    while (activeCars.length > wantCount) {
-      const c = activeCars.pop();
-      const i = cars.indexOf(c);
-      if (i >= 0) cars.splice(i, 1);
-      c.model.group.parent?.remove(c.model.group);
+    // heat cools when hidden: no crime recently and no police close
+    let nearest = 999;
+    for (const c of cars) nearest = Math.min(nearest, Math.hypot(c.pos.x - tx, c.pos.z - tz));
+    if (wanted > 0 && time - lastCrimeAt > CFG.wantedDecayDelay && nearest > 45) {
+      wanted = Math.max(0, wanted - CFG.wantedDecayRate * dt);
     }
-    // visibility: any (non-stolen) police within 55m counts as seen
-    let seen = false;
-    for (const c of cars) {
-      if (c.driver === 'player') continue;
-      if (dist2D(c.pos.x, c.pos.z, px, pz) < 55) { seen = true; break; }
-    }
-    if (seen) { unseenT = 0; decayT = 0; }
-    else {
-      unseenT += dt;
-      if (unseenT > CFG.wanted.decayDelay) {
-        decayT += dt;
-        if (decayT > CFG.wanted.decayPerStar && wanted > 0) {
-          wanted -= 1; decayT = 0;
-          if (wanted === 0) unseenT = 0;
-        }
+    // pursuit: steer toward the player, ram on contact
+    for (const car of cars) {
+      const dx = tx - car.pos.x, dz = tz - car.pos.z;
+      const dist = Math.hypot(dx, dz) || 1;
+      const desired = Math.atan2(dx, dz);
+      const steer = clamp(angleDiff(car.heading, desired) * 1.6, -1, 1);
+      const targetSpeed = dist < 6 ? CFG.policeTopSpeed * 0.6 : CFG.policeTopSpeed;
+      const throttle = car.speed < targetSpeed ? 0.9 : -0.4;
+      car.update(dt, { throttle, steer, handbrake: false }, city.colliders);
+      // ram: push the player's car and shake the camera
+      if (playerCar && dist < 3.4) {
+        const push = 9 * dt;
+        playerCar.pos.x += (dx / dist) * push * 0.4;
+        playerCar.pos.z += (dz / dist) * push * 0.4;
+        playerCar.speed *= 0.94;
+        playerCar.damage = Math.min(1, playerCar.damage + 0.02);
+        onRam?.(Math.abs(car.speed));
+      }
+      if (!playerCar && dist < 2.2) {
+        // on foot: a cop car that catches Rafi knocks him down hard
+        onRam?.(Math.abs(car.speed) * 2);
+      }
+      // light bar flash: alternate red/blue
+      const u = car.model.userData;
+      if (u.lightBar) {
+        const on = Math.sin(flashPhase) > 0;
+        u.lightBar.userData.red.emissiveIntensity = on ? 3 : 0.2;
+        u.lightBar.userData.blue.emissiveIntensity = on ? 0.2 : 3;
+        car.pools.red.opacity = on ? 0.22 : 0.05;
+        car.pools.blue.opacity = on ? 0.05 : 0.22;
       }
     }
-    sirenOn = wanted > 0 && cars.length > 0;
-    heat = damp(heat, wanted > 0 ? 1 : 0, 1.2, dt);
-
-    // pursuit: steer toward the player, ram when close; on foot, bust when adjacent
-    for (const c of cars) {
-      if (c.driver === 'player') continue; // stolen: the player drives it now
-      const dx = px - c.pos.x, dz = pz - c.pos.z;
-      const d = Math.hypot(dx, dz);
-      const wantHeading = Math.atan2(dx, dz);
-      const steer = clamp(angDiff(c.heading, wantHeading) * 2.2, -1, 1);
-      const throttle = d > 6 ? 1 : 0.7;
-      const res = updateCar(c, { throttle, steer, handbrake: false }, dt, city.colliders, (s) => onCrash?.(s, c));
-      // ram the player's car
-      if (playerCar && d < 3.4) {
-        playerCar.speed *= 0.92;
-        playerCar.damage = clamp(playerCar.damage + 0.02, 0, 1);
-        c.speed *= 0.8;
-        onCrash?.(Math.abs(playerCar.speed), c);
-      }
-      // bust: on foot, slow, police adjacent
-      if (!playerCar && d < 2.6 && player.speed < 2) {
-        onBusted?.();
-      }
-      // lightbar flash (red/blue alternate)
-      const lb = c.model.group.userData.lightbar;
-      if (lb) {
-        const phase = Math.floor(performance.now() / 260) % 2 === 0;
-        lb.redMat.emissiveIntensity = phase ? 3 : 0.1;
-        lb.blueMat.emissiveIntensity = phase ? 0.1 : 3;
-      }
-      c.model.setNight(true);
-    }
-    return { wanted, sirenOn };
   }
 
-  function clearAll(sceneRef) {
-    for (const c of cars) sceneRef.remove(c.model.group);
+  function clearAll() {
+    for (const c of cars) c.destroy();
     cars.length = 0;
-    wanted = 0; heat = 0; unseenT = 0; decayT = 0;
+    wanted = 0;
   }
 
-  return {
-    cars,
-    get wanted() { return wanted; },
-    get sirenOn() { return sirenOn; },
-    setWanted, addWanted, update, clearAll,
-  };
+  return { cars, stars, addCrime, update, clearAll, get wanted() { return wanted; }, set wanted(v) { wanted = clamp(v, 0, 5); lastCrimeAt = time; } };
 }
