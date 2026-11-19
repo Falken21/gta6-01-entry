@@ -1,65 +1,81 @@
 // Costa Serena — combat.js
-// One job: fighting. Hitscan pistol with a tracer and muzzle flash, a
-// melee shove, health, and the reactions a shot causes: peds panic, cops
-// and the wanted system notice, cars take damage and smoke.
-import * as THREE from 'three';
-import { CFG, clamp } from './config.js';
+// Tembakan hitscan sederhana + kesehatan. Tembakan dan tabrakan membuat
+// pejalan kaki panik dan menaikkan wanted; polisi yang ditembak rusak.
+import * as THREE from '../vendor/three.module.min.js';
 
-export function createCombat(scene, camera) {
-  const raycaster = new THREE.Raycaster();
-  const tracerMat = new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.9 });
-  const tracerGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
-  const tracer = new THREE.Line(tracerGeo, tracerMat);
-  tracer.visible = false;
-  scene.add(tracer);
-  const flash = new THREE.PointLight(0xffc36b, 0, 9, 1.6);
-  scene.add(flash);
+export function createCombat(W) {
+  const ray = new THREE.Raycaster();
+  const tracerMat = new THREE.LineBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.9 });
+  let tracer = null;
+  let tracerT = 0;
   let cooldown = 0;
-  let tracerTimer = 0;
+  let ammo = Infinity;
 
-  function shoot(origin, dir, targets, onHit) {
-    // targets: [{ mesh-ish object3D, radius, pos, ref }] — raycast against
-    // invisible hit spheres is cheaper and stabler than mesh raycasts.
-    if (cooldown > 0) return null;
-    cooldown = CFG.pistolCooldown;
-    raycaster.set(origin, dir);
-    raycaster.far = CFG.pistolRange;
-    let best = null, bd = CFG.pistolRange;
-    for (const t of targets) {
-      const to = new THREE.Vector3().subVectors(t.pos, origin);
-      const along = to.dot(dir);
-      if (along < 0 || along > bd) continue;
-      const perp = to.clone().addScaledVector(dir, -along).length();
-      if (perp < t.radius) { best = t; bd = along; }
+  function shoot() {
+    if (W.state !== 'playing' || cooldown > 0 || !W.player.onFoot) return;
+    cooldown = 0.28;
+    // Bidik dari bahu Rafi, nyaris horizontal (bukan dari kamera yang
+    // menukik ke arah pemain — sinar itu akan menembus tanah sebelum
+    // mencapai pejalan kaki di depan).
+    const from = W.player.pos.clone();
+    from.y = 1.5;
+    const dir = new THREE.Vector3();
+    W.camera.getWorldDirection(dir);
+    dir.y = -0.06; // sedikit menunduk
+    dir.normalize();
+    ray.set(from, dir);
+    ray.far = 90;
+    // pastikan matrix dunia mutakhir (pejalan kaki baru saja berpindah)
+    W.scene.updateMatrixWorld(true);
+    // target: pejalan kaki dulu, lalu mobil polisi, lalu gedung
+    let hit = null, hitObj = null;
+    const pedMeshes = [];
+    for (const p of W.pedestrians.list) {
+      p.g.traverse((o) => { if (o.isMesh) { o.userData.ped = p; pedMeshes.push(o); } });
     }
-    const end = origin.clone().addScaledVector(dir, bd);
-    tracerGeo.setFromPoints([origin.clone(), end]);
-    tracer.visible = true;
-    tracerTimer = 0.07;
-    flash.position.copy(origin).addScaledVector(dir, 1.2);
-    flash.intensity = 26;
-    if (best) onHit?.(best, end);
-    return best;
-  }
-
-  function melee(origin, dir, targets, onHit) {
-    let best = null, bd = 2.4;
-    for (const t of targets) {
-      const d = t.pos.distanceTo(origin);
-      if (d < bd) { best = t; bd = d; }
+    const hits = ray.intersectObjects(pedMeshes, false);
+    if (hits.length) { hit = hits[0]; hitObj = { kind: 'ped', ped: hit.object.userData.ped }; }
+    else {
+      const carMeshes = [];
+      for (const c of W.police.cops) c.model.group.traverse((o) => { if (o.isMesh) { o.userData.cop = c; carMeshes.push(o); } });
+      const ch = ray.intersectObjects(carMeshes, false);
+      if (ch.length) { hit = ch[0]; hitObj = { kind: 'cop', cop: ch[0].object.userData.cop }; }
     }
-    if (best) onHit?.(best, best.pos);
-    return best;
+    const end = hit ? hit.point : from.clone().add(dir.multiplyScalar(80));
+    // garis tracer singkat
+    if (tracer) W.scene.remove(tracer);
+    const geo = new THREE.BufferGeometry().setFromPoints([from, end]);
+    tracer = new THREE.Line(geo, tracerMat);
+    W.scene.add(tracer);
+    tracerT = 0.08;
+    W.audio.gunshot();
+    W.events.emit('shot', {});
+    if (hitObj) {
+      if (hitObj.kind === 'ped') {
+        W.pedestrians.panicAt(hitObj.ped.pos.x, hitObj.ped.pos.z, 26);
+        W.police.addHeat(1, 'penembakan terlihat');
+      } else if (hitObj.kind === 'cop') {
+        hitObj.cop.damage = (hitObj.cop.damage || 0) + 22;
+        if (hitObj.cop.damage > 60) {
+          W.police.addHeat(1, 'mobil polisi dihancurkan');
+          // polisi keluar & kabur: hapus mobilnya
+          const idx = W.police.cops.indexOf(hitObj.cop);
+          if (idx >= 0) { W.police.cops.splice(idx, 1); hitObj.cop.dispose(); }
+        }
+      }
+    } else {
+      // tembakan ke udara tetap mengagetkan pejalan kaki di dekat garis tembak
+      W.pedestrians.panicAt(end.x, end.z, 12);
+    }
   }
 
   function update(dt) {
     cooldown = Math.max(0, cooldown - dt);
-    if (tracerTimer > 0) {
-      tracerTimer -= dt;
-      if (tracerTimer <= 0) tracer.visible = false;
+    if (tracer) {
+      tracerT -= dt;
+      tracerMat.opacity = Math.max(0, tracerT / 0.08) * 0.9;
+      if (tracerT <= 0) { W.scene.remove(tracer); tracer = null; }
     }
-    flash.intensity = Math.max(0, flash.intensity - dt * 220);
   }
-
-  return { shoot, melee, update, get ready() { return cooldown <= 0; } };
+  return { shoot, update, get ammo() { return ammo; } };
 }

@@ -1,177 +1,171 @@
 // Costa Serena — pedestrians.js
-// One job: people on the pavements. Articulated low-poly figures (swinging
-// arms and legs, adult proportions, varied clothes) who walk routines,
-// wait at crossings, sit on benches — and PANIC: gunshots, collisions and
-// police chases nearby make them scream and run, arms up, away from danger.
-import * as THREE from 'three';
-import { CFG, clamp, mulberry32, pick, range } from './config.js';
+// Pejalan kaki terartikulasi berproporsi dewasa: badan, kepala, lengan &
+// kaki berayun saat berjalan; duduk di bangku, menunggu di penyeberangan,
+// dan PANIK/LARI saat ada tembakan, tabrakan, atau kejaran polisi.
+import * as THREE from '../vendor/three.module.min.js';
+import { CFG } from './config.js';
+import { collideCircle } from './city.js';
 
-const SKIN = [0xc98d64, 0x8a5a3b, 0xe8b88a, 0x6b4226, 0xd9a077];
-const SHIRTS = [0xd9552d, 0x2e6f8e, 0xd9a441, 0x4a7d5c, 0x8e4a6b, 0xe8e4da, 0x3a3f4a, 0x7fa08e];
-const PANTS = [0x2b3440, 0x4a3a2c, 0x5a5f6b, 0x1f2a33, 0x6b5a44];
+const SHIRTS = [0xc23a3a, 0x2a6ea8, 0x3a8a4a, 0xd8b23a, 0x7a4a9a, 0xe8e2d4, 0x2a2a2e, 0xc26a3a];
+const PANTS = [0x2a2f3a, 0x4a3a2a, 0x3a3a3a, 0x5a6a7a, 0x6a5a4a];
+const SKINS = [0xe8b88a, 0xc98a5a, 0x8a5a3a, 0xf2c9a0, 0x6a4526];
 
 function makePerson(rng) {
   const g = new THREE.Group();
-  const skin = new THREE.MeshStandardMaterial({ color: pick(rng, SKIN), roughness: 0.8 });
-  const shirt = new THREE.MeshStandardMaterial({ color: pick(rng, SHIRTS), roughness: 0.9 });
-  const pants = new THREE.MeshStandardMaterial({ color: pick(rng, PANTS), roughness: 0.9 });
-  const h = range(rng, 1.62, 1.88);
+  const shirt = new THREE.MeshStandardMaterial({ color: SHIRTS[Math.floor(rng() * SHIRTS.length)], roughness: 0.85 });
+  const pants = new THREE.MeshStandardMaterial({ color: PANTS[Math.floor(rng() * PANTS.length)], roughness: 0.9 });
+  const skin = new THREE.MeshStandardMaterial({ color: SKINS[Math.floor(rng() * SKINS.length)], roughness: 0.7 });
+  const h = 1.62 + rng() * 0.22;
   const s = h / 1.75;
-  // legs
-  const legGeo = new THREE.BoxGeometry(0.16 * s, 0.78 * s, 0.18 * s);
-  const legL = new THREE.Mesh(legGeo, pants); legL.position.set(-0.11 * s, 0.39 * s, 0);
-  const legR = new THREE.Mesh(legGeo, pants); legR.position.set(0.11 * s, 0.39 * s, 0);
-  legL.geometry = legGeo.clone(); legR.geometry = legGeo.clone();
-  legL.geometry.translate(0, -0.39 * s, 0); legR.geometry.translate(0, -0.39 * s, 0);
-  legL.position.y = 0.78 * s; legR.position.y = 0.78 * s;
-  legL.castShadow = true; legR.castShadow = true;
-  // torso
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.46 * s, 0.58 * s, 0.26 * s), shirt);
-  torso.position.y = 0.78 * s + 0.29 * s;
-  torso.castShadow = true;
-  // arms
-  const armGeo = new THREE.BoxGeometry(0.12 * s, 0.56 * s, 0.14 * s);
-  armGeo.translate(0, -0.28 * s, 0);
-  const armL = new THREE.Mesh(armGeo, shirt); armL.position.set(-0.29 * s, 0.78 * s + 0.52 * s, 0);
-  const armR = new THREE.Mesh(armGeo, shirt); armR.position.set(0.29 * s, 0.78 * s + 0.52 * s, 0);
-  armL.castShadow = true; armR.castShadow = true;
-  // head + hair
+  // torso (proporsi dewasa: kaki ~55% tinggi)
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42 * s, 0.62 * s, 0.24 * s), shirt);
+  torso.position.y = 1.08 * s; torso.castShadow = true; g.add(torso);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.13 * s, 10, 8), skin);
-  head.position.y = 0.78 * s + 0.58 * s + 0.14 * s;
-  head.castShadow = true;
+  head.position.y = 1.55 * s; head.castShadow = true; g.add(head);
   const hair = new THREE.Mesh(new THREE.SphereGeometry(0.135 * s, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    new THREE.MeshStandardMaterial({ color: pick(rng, [0x1a1a1a, 0x4a2c14, 0x8a6b3a, 0xd9d9d9, 0x2c2c2c]), roughness: 1 }));
-  hair.position.copy(head.position);
-  hair.position.y += 0.02;
-  g.add(legL, legR, torso, armL, armR, head, hair);
-  g.userData = { legL, legR, armL, armR, head, height: h };
-  return g;
+    new THREE.MeshStandardMaterial({ color: [0x1a1210, 0x3a2a1a, 0x6a6a6a][Math.floor(rng() * 3)], roughness: 1 }));
+  hair.position.y = 1.58 * s; g.add(hair);
+  // lengan: pivot di bahu
+  const arms = [];
+  for (const side of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.26 * s, 1.34 * s, 0);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.11 * s, 0.58 * s, 0.11 * s), shirt);
+    arm.position.y = -0.28 * s; arm.castShadow = true;
+    pivot.add(arm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.055 * s, 6, 5), skin);
+    hand.position.y = -0.58 * s; pivot.add(hand);
+    g.add(pivot); arms.push(pivot);
+  }
+  // kaki: pivot di pinggul
+  const legs = [];
+  for (const side of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.12 * s, 0.82 * s, 0);
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.15 * s, 0.8 * s, 0.15 * s), pants);
+    leg.position.y = -0.4 * s; leg.castShadow = true;
+    pivot.add(leg);
+    g.add(pivot); legs.push(pivot);
+  }
+  return { g, arms, legs, torso, head, height: h };
 }
 
-export function createPedestrians(scene, city, seed = CFG.seed) {
-  const rng = mulberry32(seed + 202);
-  const peds = [];
-  const P = CFG.blockPitch;
+export function createPedestrians(W) {
+  const list = [];
+  const sidewalks = [];
+  for (const z of CFG.streets) for (const dz of [-9, 9]) sidewalks.push({ axis: 'x', fixed: z + dz });
+  for (const x of CFG.avenues) for (const dx of [-9, 9]) sidewalks.push({ axis: 'z', fixed: x + dx });
 
-  function randomSidewalkPos() {
-    // Pick a road, stand on its pavement (7.5 m from the centre line).
-    const road = city.roads[Math.floor(rng() * city.roads.length)];
-    const t = range(rng, -200, 200);
-    const off = (rng() < 0.5 ? -1 : 1) * 7.6;
-    if (road.axis === 'x') return { x: t, z: road.line + off };
-    return { x: road.line + off, z: t };
+  function randomSidewalkPoint() {
+    const sw = sidewalks[Math.floor(W.rng() * sidewalks.length)];
+    if (sw.axis === 'x') return { x: (W.rng() - 0.5) * 380, z: sw.fixed };
+    return { x: sw.fixed, z: (W.rng() - 0.5) * 260 };
+  }
+  function spawn(i) {
+    const p = randomSidewalkPoint();
+    const m = makePerson(W.rng);
+    m.g.position.set(p.x, 0, p.z);
+    W.scene.add(m.g);
+    const ped = {
+      ...m, pos: m.g.position,
+      heading: W.rng() * Math.PI * 2,
+      speed: 1.1 + W.rng() * 0.9,
+      target: randomSidewalkPoint(),
+      state: 'walk',           // walk | sit | panic | flee-car
+      panicT: 0, phase: W.rng() * 6.28,
+      sitT: W.rng() < 0.15 ? 20 + W.rng() * 40 : 0,
+    };
+    list.push(ped);
+    return ped;
+  }
+  for (let i = 0; i < CFG.pedestrians; i++) spawn(i);
+
+  // bangku di trotoar (tempat duduk)
+  const benchMat = new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.9 });
+  for (let i = 0; i < 8; i++) {
+    const bx = CFG.avenues[i % CFG.avenues.length] + 10.5;
+    const bz = CFG.streets[Math.floor(i / 2) % CFG.streets.length] - 9;
+    const bench = new THREE.Group();
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 0.6), benchMat);
+    seat.position.y = 0.45; bench.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.6, 0.1), benchMat);
+    back.position.set(0, 0.85, -0.28); bench.add(back);
+    bench.position.set(bx, 0, bz);
+    bench.traverse((o) => { o.castShadow = true; });
+    W.scene.add(bench);
   }
 
-  for (let i = 0; i < 26; i++) {
-    const p = randomSidewalkPos();
-    const model = makePerson(rng);
-    model.position.set(p.x, 0, p.z);
-    scene.add(model);
-    peds.push({
-      model,
-      pos: model.position,
-      heading: rng() * Math.PI * 2,
-      speed: range(rng, 0.9, 1.6),
-      walkPhase: rng() * Math.PI * 2,
-      state: 'walk',       // walk | wait | sit | panic | flee | down
-      stateTimer: range(rng, 4, 14),
-      panicTimer: 0,
-      health: 100,
-      target: randomSidewalkPos(),
-      update(dt, danger) {
-        // danger: {x, z, radius, kind} or null — gunfire, crashes, chases.
-        if (this.state !== 'down' && danger) {
-          const d = Math.hypot(this.pos.x - danger.x, this.pos.z - danger.z);
-          if (d < danger.radius) {
-            if (this.state !== 'panic') {
-              this.state = 'panic';
-              this.panicTimer = range(rng, 2.5, 5);
-              this.fleeX = this.pos.x + (this.pos.x - danger.x) / (d || 1) * 30;
-              this.fleeZ = this.pos.z + (this.pos.z - danger.z) / (d || 1) * 30;
-            }
-          }
-        }
-        let moveSpeed = 0;
-        if (this.state === 'panic') {
-          this.panicTimer -= dt;
-          const dx = this.fleeX - this.pos.x, dz = this.fleeZ - this.pos.z;
-          const d = Math.hypot(dx, dz) || 1;
-          this.heading = Math.atan2(dx, dz);
-          moveSpeed = 4.6;
-          this.pos.x += (dx / d) * moveSpeed * dt;
-          this.pos.z += (dz / d) * moveSpeed * dt;
-          if (this.panicTimer <= 0 || d < 1.5) { this.state = 'walk'; this.stateTimer = range(rng, 5, 12); }
-        } else if (this.state === 'walk') {
-          const dx = this.target.x - this.pos.x, dz = this.target.z - this.pos.z;
-          const d = Math.hypot(dx, dz);
-          if (d < 1.2) {
-            this.state = rng() < 0.3 ? 'wait' : 'walk';
-            this.stateTimer = range(rng, 3, 9);
-            if (this.state === 'walk') this.target = randomSidewalkPos();
-          } else {
-            this.heading = Math.atan2(dx, dz);
-            moveSpeed = this.speed;
-            this.pos.x += (dx / d) * moveSpeed * dt;
-            this.pos.z += (dz / d) * moveSpeed * dt;
-          }
-        } else if (this.state === 'wait') {
-          this.stateTimer -= dt;
-          if (this.stateTimer <= 0) { this.state = 'walk'; this.target = randomSidewalkPos(); }
-        }
-        // keep inside the city
-        this.pos.x = clamp(this.pos.x, -CFG.worldHalf, CFG.worldHalf);
-        this.pos.z = clamp(this.pos.z, -CFG.worldHalf, CFG.worldHalf);
-        // animate: legs + arms swing; panic throws arms up
-        const u = this.model.userData;
-        this.walkPhase += dt * (2 + moveSpeed * 2.4);
-        const swing = Math.sin(this.walkPhase) * clamp(moveSpeed / 2, 0, 1) * 0.7;
-        u.legL.rotation.x = swing;
-        u.legR.rotation.x = -swing;
-        if (this.state === 'panic') {
-          u.armL.rotation.x = -2.4 + Math.sin(this.walkPhase * 2) * 0.3;
-          u.armR.rotation.x = -2.4 - Math.sin(this.walkPhase * 2) * 0.3;
-          u.armL.rotation.z = 0.5; u.armR.rotation.z = -0.5;
-        } else {
-          u.armL.rotation.x = -swing * 0.8;
-          u.armR.rotation.x = swing * 0.8;
-          u.armL.rotation.z = 0.12; u.armR.rotation.z = -0.12;
-        }
-        this.model.rotation.y = this.heading;
-        this.model.position.y = this.state === 'down' ? -0.2 : Math.abs(Math.sin(this.walkPhase)) * 0.03 * clamp(moveSpeed, 0, 1);
-      },
-      hit(dmg, fromX, fromZ) {
-        this.health -= dmg;
-        if (this.health <= 0) {
-          this.state = 'down';
-          this.model.rotation.x = -Math.PI / 2;
-          this.model.position.y = 0.15;
-          return true;
-        }
-        // A wound sends them running too.
-        this.state = 'panic';
-        this.panicTimer = 4;
-        const d = Math.hypot(this.pos.x - fromX, this.pos.z - fromZ) || 1;
-        this.fleeX = this.pos.x + (this.pos.x - fromX) / d * 30;
-        this.fleeZ = this.pos.z + (this.pos.z - fromZ) / d * 30;
-        return false;
-      },
-      revive() {
-        this.health = 100; this.state = 'walk';
-        this.model.rotation.x = 0;
-        this.target = randomSidewalkPos();
-      },
-    });
-  }
-
-  function nearest(x, z, maxDist = 3) {
-    let best = null, bd = maxDist;
-    for (const p of peds) {
-      if (p.state === 'down') continue;
+  function panicAt(x, z, radius = 22) {
+    let n = 0;
+    for (const p of list) {
       const d = Math.hypot(p.pos.x - x, p.pos.z - z);
-      if (d < bd) { bd = d; best = p; }
+      if (d < radius && p.state !== 'panic') {
+        p.state = 'panic'; p.panicT = 3 + W.rng() * 3;
+        p.fleeFrom = { x, z };
+        n++;
+      }
     }
-    return best;
+    return n;
   }
 
-  return { peds, nearest };
+  function update(dt, t) {
+    for (const p of list) {
+      let targetSpeed = p.speed;
+      let moving = true;
+      if (p.state === 'panic') {
+        p.panicT -= dt;
+        targetSpeed = 5.2; // LARI
+        const dx = p.pos.x - p.fleeFrom.x, dz = p.pos.z - p.fleeFrom.z;
+        const d = Math.max(0.01, Math.hypot(dx, dz));
+        const want = Math.atan2(dx / d, dz / d);
+        p.heading += shortestAngle(want - p.heading) * Math.min(1, dt * 6);
+        if (p.panicT <= 0) { p.state = 'walk'; p.target = randomSidewalkPoint(); }
+      } else if (p.sitT > 0) {
+        p.sitT -= dt; moving = false;
+      } else {
+        const dx = p.target.x - p.pos.x, dz = p.target.z - p.pos.z;
+        const d = Math.hypot(dx, dz);
+        if (d < 2) { p.target = randomSidewalkPoint(); if (W.rng() < 0.1) p.sitT = 15 + W.rng() * 30; }
+        else {
+          const want = Math.atan2(dx, dz);
+          p.heading += shortestAngle(want - p.heading) * Math.min(1, dt * 4);
+        }
+      }
+      // bahaya di dekat: mobil ngebut / polisi mengejar -> panik
+      if (p.state === 'walk' && W.playerCar) {
+        const d = Math.hypot(p.pos.x - W.playerCar.pos.x, p.pos.z - W.playerCar.pos.z);
+        if (d < 6 && Math.abs(W.playerCar.speed) > 12) panicAt(p.pos.x, p.pos.z, 10);
+      }
+      if (moving) {
+        p.pos.x += Math.sin(p.heading) * targetSpeed * dt;
+        p.pos.z += Math.cos(p.heading) * targetSpeed * dt;
+        collideCircle(p.pos, 0.4, W.city.colliders);
+        p.pos.x = Math.max(-205, Math.min(205, p.pos.x));
+        p.pos.z = Math.max(-145, Math.min(146, p.pos.z));
+      }
+      // animasi artikulasi
+      const swing = moving ? Math.sin(t * (p.state === 'panic' ? 11 : 6) + p.phase) * (p.state === 'panic' ? 0.85 : 0.55) : 0;
+      p.legs[0].rotation.x = swing;
+      p.legs[1].rotation.x = -swing;
+      if (p.state === 'panic') {
+        // lengan terangkat panik
+        p.arms[0].rotation.x = -2.4 + Math.sin(t * 13 + p.phase) * 0.25;
+        p.arms[1].rotation.x = -2.4 - Math.sin(t * 13 + p.phase) * 0.25;
+      } else {
+        p.arms[0].rotation.x = -swing * 0.7;
+        p.arms[1].rotation.x = swing * 0.7;
+      }
+      p.torso.rotation.x = moving ? 0.06 : 0;
+      p.g.rotation.y = p.heading;
+      if (p.sitT > 0) { p.legs[0].rotation.x = -1.4; p.legs[1].rotation.x = -1.4; p.g.position.y = -0.32; }
+      else p.g.position.y = 0;
+    }
+  }
+
+  return { list, update, panicAt, spawn };
+}
+function shortestAngle(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
 }

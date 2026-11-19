@@ -1,83 +1,123 @@
 // Costa Serena — config.js
-// One job: every tunable constant, the seeded RNG, and small math helpers.
-// All gameplay randomness flows through mulberry32 so a seed reproduces a run.
-import * as THREE from 'three';
+// Satu sumber kebenaran untuk tuning, seed, dan definisi misi.
+// Semua keacakan gameplay mengalir lewat rng() yang di-seed, supaya
+// mode screenshot dan replay selalu deterministik.
+import * as THREE from '../vendor/three.module.min.js';
 
-export const TAU = Math.PI * 2;
-
-export function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
-export function lerp(a, b, t) { return a + (b - a) * t; }
-export function smooth(t) { return t * t * (3 - 2 * t); }
-// Shortest signed angle difference, in (-PI, PI].
-export function angleDiff(a, b) {
-  let d = (b - a) % TAU;
-  if (d > Math.PI) d -= TAU;
-  if (d < -Math.PI) d += TAU;
-  return d;
-}
 export function mulberry32(seed) {
-  let s = seed >>> 0;
-  return function next() {
-    s |= 0; s = (s + 0x6D2B79F5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+  let a = seed >>> 0;
+  return function rng() {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-export function pick(rng, arr) { return arr[Math.floor(rng() * arr.length) % arr.length]; }
-export function range(rng, a, b) { return a + rng() * (b - a); }
 
-// ---- World tuning -------------------------------------------------------
 export const CFG = {
   seed: 20261119,
-  // City: a 9x9 block grid, 44 m pitch, roads 12 m wide, world spans about +-220 m.
-  blockPitch: 44,
-  roadWidth: 12,
-  gridHalf: 4,            // roads at -4..+4 grid lines
-  worldHalf: 212,         // playable bounds
-  beachX: -196,           // sand starts west of this line
-  waterX: -232,           // marina water plane centre line
-  // Player on foot
+  // ---- world geometry (metres) ----
+  block: 60,            // ukuran blok kota
+  roadW: 14,            // lebar jalan
+  avenues: [-180, -120, -60, 0, 60, 120, 180],   // jalan utara-selatan (sumbu z)
+  streets: [-120, -60, 0, 60, 120],              // jalan timur-barat (sumbu x)
+  cityMinX: -210, cityMaxX: 210,
+  cityMinZ: -150, cityMaxZ: 150,
+  beachZ: 150,          // garis pantai
+  waterZ: 168,          // awal air
+  worldFar: 520,
+  // ---- player ----
   walkSpeed: 5.2,
-  runSpeed: 9.0,
+  runSpeed: 9.5,
   playerRadius: 0.55,
   playerHealth: 100,
-  // Driving
-  carTopSpeed: 34,        // m/s, about 122 km/h
-  carAccel: 13,
-  carBrake: 26,
-  carReverseTop: 9,
-  carGrip: 2.4,           // steering authority
-  carRadius: 1.7,
-  // Police / wanted
+  // ---- driving ----
+  carAccel: 16, carBrake: 34, carMaxSpeed: 42, carMaxReverse: 12,
+  steerMax: 0.55, grip: 6.5, handbrakeGrip: 1.6,
+  // ---- wanted ----
   wantedMax: 5,
-  wantedDecayDelay: 9,    // seconds without a crime before stars start draining
-  wantedDecayRate: 0.12,  // stars per second while hidden
-  policeTopSpeed: 36,
-  policeSpawnDist: 70,
-  // Combat
-  pistolDamage: 34,
-  pistolCooldown: 0.28,
-  pistolRange: 60,
-  // Day cycle: one full day is 6 minutes of real time; start at golden hour.
-  dayLengthSec: 360,
-  startHour: 17.55,
-  // Missions
-  missionCash: [400, 700, 900, 1200, 2000],
-  secondaryBonus: [150, 250, 300, 400, 600],
-  // Screenshot scenes
-  shotFrames: 60,         // frames to settle a composed shot before freezing
+  heatTheftSeen: 1, heatCollision: 0.35, heatShoot: 1, heatPedHit: 0.5,
+  heatMission: 1, coolDelay: 7, coolRate: 0.22,
+  // ---- economy ----
+  startCash: 120,
+  // ---- traffic / peds ----
+  trafficCars: 14, parkedCars: 10, pedestrians: 26,
+  // ---- weather ----
+  dayLength: 300,       // detik satu siklus siang penuh (mode bebas)
+  rainChance: 0.22,
+  // ---- audio ----
+  radioDefault: true,
 };
 
-export const COLOURS = {
-  skyDay: new THREE.Color(0x7fb4dd),
-  skyGolden: new THREE.Color(0xff9e57),
-  skyDusk: new THREE.Color(0x2c3e63),
-  skyNight: new THREE.Color(0x0a1226),
-  fogDay: new THREE.Color(0xa8c6de),
-  fogGolden: new THREE.Color(0xe8a06a),
-  fogNight: new THREE.Color(0x0c1424),
+export const MISSIONS = [
+  {
+    id: 'm1', title: 'Paket Pertama', giver: 'Darto',
+    brief: 'Antar paket ke gudang pelabuhan sebelum waktu habis. Jangan sampai rusak.',
+    steps: [
+      { kind: 'goto', label: 'Ambil paket di bengkel Rafi', at: [9, -102] },
+      { kind: 'goto', label: 'Antar ke gudang pelabuhan', at: [-171, 102], time: 150 },
+    ],
+    secondary: { label: 'Bonus: antar paket kedua di jalan (+$150)', at: [111, -42], reward: 150 },
+    reward: 400, heat: 0,
+  },
+  {
+    id: 'm2', title: 'Mata-Mata Pelabuhan', giver: 'Darto',
+    brief: 'Polisi mengendus. Kabur dari kejaran sampai bintang padam.',
+    steps: [
+      { kind: 'goto', label: 'Temui informan di gang marina', at: [-51, 132] },
+      { kind: 'escape', label: 'Hilang dari kejaran polisi', heat: 2, hold: 25 },
+    ],
+    secondary: { label: 'Bonus: kabur tanpa menabrak apa pun (+$200)', reward: 200, noCrash: true },
+    reward: 550, heat: 2,
+  },
+  {
+    id: 'm3', title: 'Balapan Pantai', giver: 'Luna',
+    brief: 'Balapan melawan waktu di jalan pesisir. Tiga gerbang, satu garis finis.',
+    steps: [
+      { kind: 'race', label: 'Lewati gerbang 1', at: [-150, 138] },
+      { kind: 'race', label: 'Lewati gerbang 2', at: [0, 138] },
+      { kind: 'race', label: 'Finis di mercusuar', at: [180, 138], time: 75 },
+    ],
+    secondary: { label: 'Bonus: finis di bawah 55 detik (+$250)', reward: 250, parTime: 55 },
+    reward: 700, heat: 0,
+  },
+  {
+    id: 'm4', title: 'Kerja Kapal', giver: 'Kapten Mora',
+    brief: 'Bawa perahu dari marina ke dermaga utara. Peti mengapung di jalur.',
+    steps: [
+      { kind: 'goto', label: 'Naik ke perahu di marina', at: [3, 158] },
+      { kind: 'boat', label: 'Bawa perahu ke dermaga utara', at: [-60, 166] },
+    ],
+    secondary: { label: 'Bonus: kumpulkan 3 peti mengapung (+$180)', reward: 180, crates: 3 },
+    reward: 800, heat: 1,
+  },
+  {
+    id: 'm5', title: 'Pelarian Terakhir', giver: 'Rafi',
+    brief: 'Utang lunas malam ini. Tembus blokade ke gerbang utara — hidup atau mati.',
+    steps: [
+      { kind: 'goto', label: 'Ambil tas uang di atap parkir', at: [171, -102] },
+      { kind: 'escape', label: 'Tembus ke gerbang utara', at: [0, -138], heat: 4, hold: 0 },
+    ],
+    secondary: { label: 'Bonus: sampai dengan mobil utuh (+$300)', reward: 300, noDamage: true },
+    reward: 1500, heat: 4,
+  },
+];
+
+export const SIDE_JOBS = {
+  taxi: { label: 'Taksi: antar penumpang', reward: 120 },
+  race: { label: 'Balap jalanan (time trial)', reward: 180 },
+  pickup: { label: 'Paket kilat', reward: 90 },
+};
+
+export const PALETTE = {
+  skyDay: new THREE.Color(0x7fb4d8),
+  skyGolden: new THREE.Color(0xf2a35e),
+  skyNight: new THREE.Color(0x0d1b2e),
+  fogDay: new THREE.Color(0xa8c6d8),
   sunDay: new THREE.Color(0xfff2d8),
-  sunGolden: new THREE.Color(0xffb36b),
-  sunNight: new THREE.Color(0x5a6f9e),
+  sunGolden: new THREE.Color(0xffb066),
+  asphalt: 0x2e2f33,
+  sidewalk: 0x8f8a80,
+  sand: 0xd9c08a,
+  water: 0x1d6f7e,
 };

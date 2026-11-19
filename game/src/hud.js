@@ -1,131 +1,123 @@
 // Costa Serena — hud.js
-// One job: everything the player reads. Wanted stars, health, cash, the
-// mission objective with distance, speed while driving, prompts, toasts,
-// and a live minimap (roads, player arrow, police blips, objective marker).
-// Title, pause and game-over screens live here too.
-import { CFG, clamp } from './config.js';
+// HUD DOM: bintang wanted, kesehatan, cash, objektif + jarak, kecepatan,
+// MINIMAP live (jalan, panah pemain, blip polisi, penanda misi), toast,
+// layar judul / jeda / game over, crosshair, dan vignette damage.
+import { CFG } from './config.js';
 
-export function createHud(city) {
+export function createHud(W) {
+  const root = document.getElementById('hud');
+  root.innerHTML = `
+    <div id="topbar">
+      <div id="wanted"></div>
+      <div id="cash">$${W.player.cash}</div>
+    </div>
+    <div id="objective"><div id="obj-main"></div><div id="obj-sub"></div><div id="obj-dist"></div></div>
+    <div id="healthbar"><div id="healthfill"></div></div>
+    <div id="speed"></div>
+    <canvas id="minimap" width="180" height="180"></canvas>
+    <div id="crosshair">+</div>
+    <div id="toasts"></div>
+    <div id="vignette"></div>
+    <div id="hint">WASD jalan/nyetir · E masuk/keluar mobil · Klik tembak · N misi · R radio · M bisu · P jeda</div>
+    <div id="screen-title" class="screen">
+      <div class="title-kicker">KOTA PANTAI · OPEN WORLD · 3D</div>
+      <h1>COSTA<br>SERENA</h1>
+      <p class="tagline">Rafi, montir kapal yang utang kakaknya menumpuk. Satu kota, lima misi, dan polisi yang tak pernah tidur.</p>
+      <button id="btn-play">▶ MULAI BERMAIN</button>
+      <p class="controls">WASD bergerak &nbsp;·&nbsp; Mouse putar kamera &nbsp;·&nbsp; E curi mobil &nbsp;·&nbsp; Klik tembak &nbsp;·&nbsp; Spasi rem tangan</p>
+    </div>
+    <div id="screen-pause" class="screen hidden">
+      <h2>JEDA</h2>
+      <p>Tekan P untuk lanjut, atau R untuk mulai ulang.</p>
+      <button id="btn-resume">▶ LANJUT</button>
+      <button id="btn-restart1">↻ MULAI ULANG</button>
+    </div>
+    <div id="screen-over" class="screen hidden">
+      <h2 id="over-title">GAME OVER</h2>
+      <p id="over-reason"></p>
+      <p id="over-stats"></p>
+      <button id="btn-restart2">↻ MAIN LAGI</button>
+    </div>`;
   const el = (id) => document.getElementById(id);
-  const starsEl = el('stars'), healthFill = el('health-fill'), healthText = el('health-text');
-  const cashEl = el('cash'), objEl = el('objective'), speedEl = el('speed');
-  const promptEl = el('prompt'), toastEl = el('toast'), timeEl = el('clock');
-  const map = el('minimap');
-  const mapCtx = map.getContext('2d');
-  const titleEl = el('title'), pauseEl = el('pause'), overEl = el('gameover');
-  const overStats = el('over-stats');
+  const mapCtx = el('minimap').getContext('2d');
 
-  let toastTimer = 0;
-  let lastToast = '';
-
-  function showToast(text) {
-    if (text === lastToast && toastTimer > 1) return;
-    lastToast = text;
-    toastEl.textContent = text;
-    toastEl.classList.add('show');
-    toastTimer = 4;
+  function setObjective(main, sub = '') {
+    el('obj-main').textContent = main;
+    el('obj-sub').textContent = sub ? '★ ' + sub : '';
+    el('obj-dist').textContent = '';
   }
-  function showPrompt(text) {
-    if (!text) { promptEl.classList.remove('show'); return; }
-    promptEl.textContent = text;
-    promptEl.classList.add('show');
+  function setObjectiveDistance(d) {
+    el('obj-dist').textContent = d != null ? `${Math.round(d)} m` : '';
   }
-
-  function drawMinimap(playerPos, playerHeading, playerCar, policeCars, objective, time) {
-    const W = map.width, H = map.height;
-    const scale = W / 480; // world +-240 maps onto the canvas
-    const toMap = (x, z) => [W / 2 + x * scale, H / 2 + z * scale];
-    mapCtx.clearRect(0, 0, W, H);
-    // sea + sand on the west edge
-    mapCtx.fillStyle = '#0e4a5e';
-    mapCtx.fillRect(0, 0, toMap(-196, 0)[0], H);
-    mapCtx.fillStyle = '#d9c08f';
-    mapCtx.fillRect(toMap(-196, 0)[0], 0, toMap(-176, 0)[0] - toMap(-196, 0)[0], H);
-    // blocks
-    mapCtx.fillStyle = '#3a3f46';
-    mapCtx.fillRect(0, 0, W, H);
-    // roads
-    mapCtx.strokeStyle = '#7d7466';
-    mapCtx.lineWidth = 3;
-    for (const r of city.roads) {
-      mapCtx.beginPath();
-      if (r.axis === 'x') {
-        const [x1, y] = toMap(-220, r.line);
-        const [x2] = toMap(220, r.line);
-        mapCtx.moveTo(x1, y); mapCtx.lineTo(x2, y);
-      } else {
-        const [x, y1] = toMap(r.line, -220);
-        const [, y2] = toMap(r.line, 220);
-        mapCtx.moveTo(x, y1); mapCtx.lineTo(x, y2);
-      }
-      mapCtx.stroke();
-    }
-    // objective marker
-    if (objective) {
-      const [ox, oy] = toMap(objective.x, objective.z);
-      mapCtx.fillStyle = '#ffc400';
-      mapCtx.beginPath(); mapCtx.arc(ox, oy, 5, 0, Math.PI * 2); mapCtx.fill();
-      mapCtx.strokeStyle = '#fff'; mapCtx.lineWidth = 1.5;
-      mapCtx.beginPath(); mapCtx.arc(ox, oy, 8, 0, Math.PI * 2); mapCtx.stroke();
-    }
-    // police blips
-    for (const c of policeCars) {
-      const [px, py] = toMap(c.pos.x, c.pos.z);
-      mapCtx.fillStyle = '#ff3344';
-      mapCtx.beginPath(); mapCtx.arc(px, py, 3.5, 0, Math.PI * 2); mapCtx.fill();
-    }
-    // player arrow
-    const [px, py] = toMap(playerPos.x, playerPos.z);
-    mapCtx.save();
-    mapCtx.translate(px, py);
-    mapCtx.rotate(-playerHeading + Math.PI);
-    mapCtx.fillStyle = '#fff';
-    mapCtx.beginPath();
-    mapCtx.moveTo(0, -7); mapCtx.lineTo(5, 6); mapCtx.lineTo(-5, 6);
-    mapCtx.closePath(); mapCtx.fill();
-    mapCtx.strokeStyle = '#111'; mapCtx.lineWidth = 1; mapCtx.stroke();
-    mapCtx.restore();
+  function toast(msg, kind = 'info') {
+    const t = document.createElement('div');
+    t.className = 'toast ' + kind;
+    t.textContent = msg;
+    el('toasts').appendChild(t);
+    setTimeout(() => t.classList.add('fade'), 3600);
+    setTimeout(() => t.remove(), 4400);
   }
-
-  function update(dt, s) {
-    // s: { wanted, health, cash, objective, objectiveDist, speed, inCar,
-    //      hour, playerPos, heading, playerCar, policeCars, objectivePos }
-    if (toastTimer > 0) {
-      toastTimer -= dt;
-      if (toastTimer <= 0) toastEl.classList.remove('show');
-    }
-    const stars = '★'.repeat(s.wanted) + '☆'.repeat(Math.max(0, 5 - s.wanted));
-    starsEl.textContent = stars;
-    starsEl.classList.toggle('hot', s.wanted > 0);
-    healthFill.style.width = `${clamp(s.health, 0, 100)}%`;
-    healthFill.classList.toggle('low', s.health < 30);
-    healthText.textContent = `${Math.ceil(s.health)}`;
-    cashEl.textContent = `$${s.cash.toLocaleString('en-US')}`;
-    const dist = s.objectiveDist != null ? ` — ${Math.round(s.objectiveDist)} m` : '';
-    objEl.textContent = s.objective + dist;
-    if (s.inCar) {
-      speedEl.classList.add('show');
-      speedEl.textContent = `${Math.round(Math.abs(s.speed) * 3.6)} km/h`;
-    } else {
-      speedEl.classList.remove('show');
-    }
-    const hh = Math.floor(s.hour) % 24;
-    const mm = Math.floor((s.hour % 1) * 60);
-    timeEl.textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-    drawMinimap(s.playerPos, s.heading, s.playerCar, s.policeCars, s.objectivePos, s.hour);
+  function update(dt) {
+    // wanted
+    let stars = '';
+    for (let i = 0; i < 5; i++) stars += i < W.police.wanted ? '★' : '☆';
+    el('wanted').textContent = stars;
+    el('wanted').className = W.police.wanted > 0 ? 'hot' : '';
+    el('cash').textContent = '$' + Math.round(W.player.cash);
+    el('healthfill').style.width = Math.max(0, W.player.health) + '%';
+    el('healthfill').style.background = W.player.health > 50 ? '#3fae5a' : W.player.health > 25 ? '#d8a03a' : '#c23a3a';
+    const car = W.player.car;
+    el('speed').textContent = car ? `${Math.round(Math.abs(car.speed) * 3.6)} km/j` : '';
+    el('crosshair').style.display = (W.player.onFoot && W.state === 'playing') ? 'block' : 'none';
+    el('vignette').style.opacity = W.player.health < 40 ? String((40 - W.player.health) / 40 * 0.7) : '0';
+    drawMinimap();
   }
-
-  function showTitle() { titleEl.classList.remove('hidden'); }
-  function hideTitle() { titleEl.classList.add('hidden'); }
-  function showPause(show) { pauseEl.classList.toggle('hidden', !show); }
-  function showGameOver(cash, missionsDone) {
-    overStats.textContent = `Uang: $${cash.toLocaleString('en-US')} · Misi selesai: ${missionsDone} / 5`;
-    overEl.classList.remove('hidden');
+  function drawMinimap() {
+    const c = mapCtx, S = 180, sc = S / 460;
+    c.clearRect(0, 0, S, S);
+    c.fillStyle = 'rgba(12,20,28,0.82)';
+    c.fillRect(0, 0, S, S);
+    const px = (x) => (x + 230) * sc, pz = (z) => (z + 230) * sc;
+    // jalan
+    c.strokeStyle = '#5a6068'; c.lineWidth = 4;
+    for (const x of CFG.avenues) { c.beginPath(); c.moveTo(px(x), pz(-160)); c.lineTo(px(x), pz(160)); c.stroke(); }
+    for (const z of CFG.streets) { c.beginPath(); c.moveTo(px(-220), pz(z)); c.lineTo(px(220), pz(z)); c.stroke(); }
+    // laut
+    c.fillStyle = '#1d6f7e'; c.fillRect(0, pz(150), S, S - pz(150));
+    // objektif
+    const obj = W.missions.objectivePos;
+    if (obj) {
+      c.fillStyle = '#ffd23a';
+      c.beginPath(); c.arc(px(obj.x), pz(obj.z), 6, 0, 7); c.fill();
+      c.strokeStyle = '#ffd23a'; c.lineWidth = 2;
+      c.beginPath(); c.arc(px(obj.x), pz(obj.z), 10, 0, 7); c.stroke();
+    }
+    // polisi
+    c.fillStyle = '#5a8cff';
+    for (const cop of W.police.cops) {
+      c.beginPath(); c.arc(px(cop.pos.x), pz(cop.pos.z), 4, 0, 7); c.fill();
+    }
+    // pemain
+    const p = W.player.pos;
+    c.save();
+    c.translate(px(p.x), pz(p.z));
+    c.rotate(W.player.onFoot ? W.player.heading : (W.player.car ? W.player.car.heading : 0));
+    c.fillStyle = '#ffffff';
+    c.beginPath(); c.moveTo(0, -7); c.lineTo(5, 6); c.lineTo(-5, 6); c.closePath(); c.fill();
+    c.restore();
   }
-  function hideGameOver() { overEl.classList.add('hidden'); }
-
+  function show(id) { el(id).classList.remove('hidden'); }
+  function hide(id) { el(id).classList.add('hidden'); }
+  function showTitle() { show('screen-title'); hide('screen-pause'); hide('screen-over'); }
+  function showPause() { show('screen-pause'); }
+  function hidePause() { hide('screen-pause'); }
+  function showOver(reason, stats) {
+    el('over-reason').textContent = reason;
+    el('over-stats').textContent = stats;
+    show('screen-over');
+  }
   return {
-    update, showToast, showPrompt, showTitle, hideTitle,
-    showPause, showGameOver, hideGameOver,
+    update, toast, setObjective, setObjectiveDistance,
+    showTitle, showPause, hidePause, showOver, hide: (id) => hide(id), show: (id) => show(id),
   };
 }

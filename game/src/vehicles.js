@@ -1,242 +1,229 @@
 // Costa Serena — vehicles.js
-// One job: car models and arcade driving physics with weight — acceleration
-// curves, braking, handbrake, body roll/pitch, steering wheels, brake lights,
-// headlights at night, damage smoke. Any parked or stopped car can be stolen.
-import * as THREE from 'three';
-import { CFG, clamp, lerp, mulberry32, pick, range } from './config.js';
+// Model mobil prosedural multi-bagian (bodi, kabin berkaca, roda berputar &
+// membelok, lampu rem, lampu depan, asap kerusakan) + fisika berkendara
+// arcade berbobot: akselerasi, pengereman, body roll/pitch, grip.
+import * as THREE from '../vendor/three.module.min.js';
+import { CFG } from './config.js';
+import { collideCircle } from './city.js';
 
 export const CAR_TYPES = {
-  sedan:  { len: 4.4, wid: 1.9, hgt: 0.72, top: 33, accel: 12, colours: [0x8a1f1f, 0x1f3a5f, 0x2e2e33, 0xcfc8b8, 0x3a5f3a] },
-  hatch:  { len: 3.8, wid: 1.8, hgt: 0.7,  top: 30, accel: 13, colours: [0xd9a441, 0x7fa08e, 0xc4552d, 0x9fb4c0, 0xe8e4da] },
-  taxi:   { len: 4.4, wid: 1.9, hgt: 0.72, top: 32, accel: 12, colours: [0xe8b400] },
-  pickup: { len: 4.9, wid: 2.0, hgt: 0.85, top: 31, accel: 11, colours: [0x5a3a2a, 0x2f4a3a, 0x6b6f75] },
-  police: { len: 4.5, wid: 1.95, hgt: 0.72, top: 36, accel: 14, colours: [0x1c1f24] },
-  sport:  { len: 4.3, wid: 1.95, hgt: 0.62, top: 38, accel: 16, colours: [0xb01030, 0x10243a, 0xd9a441] },
+  sedan:   { w: 1.9, l: 4.6, h: 0.62, cabin: 0.55, color: 0x8a2f2a, accel: 1.0, top: 42 },
+  hatch:   { w: 1.8, l: 3.9, h: 0.66, cabin: 0.6,  color: 0x2a6ea8, accel: 1.05, top: 40 },
+  taxi:    { w: 1.9, l: 4.5, h: 0.62, cabin: 0.55, color: 0xe8b93a, accel: 1.0, top: 41 },
+  pickup:  { w: 2.0, l: 5.0, h: 0.75, cabin: 0.5,  color: 0x4a5a3a, accel: 0.9, top: 39 },
+  sport:   { w: 1.95, l: 4.4, h: 0.5, cabin: 0.42, color: 0xc23a6e, accel: 1.2, top: 48 },
+  police:  { w: 1.95, l: 4.7, h: 0.62, cabin: 0.55, color: 0x1c1e24, accel: 1.15, top: 46 },
+  van:     { w: 2.0, l: 5.2, h: 1.1, cabin: 0.9,   color: 0xd8d2c4, accel: 0.85, top: 36 },
 };
 
-const glassMat = new THREE.MeshStandardMaterial({ color: 0x18222c, roughness: 0.12, metalness: 0.7 });
+const paintMats = new Map();
+function paint(color) {
+  if (!paintMats.has(color)) {
+    paintMats.set(color, new THREE.MeshStandardMaterial({
+      color, metalness: 0.85, roughness: 0.32, envMapIntensity: 1.1,
+    }));
+  }
+  return paintMats.get(color);
+}
+const glassMat = new THREE.MeshStandardMaterial({
+  color: 0x10161f, metalness: 0.1, roughness: 0.06, envMapIntensity: 1.8,
+});
 const tyreMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.95 });
-const hubMat = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.35, metalness: 0.8 });
-const chromeMat = new THREE.MeshStandardMaterial({ color: 0xd8d8d8, roughness: 0.2, metalness: 0.9 });
+const rimMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, metalness: 0.9, roughness: 0.3 });
+const lightOff = new THREE.MeshStandardMaterial({ color: 0x3a1512, emissive: 0x550000, emissiveIntensity: 0.15 });
+const lightOn = new THREE.MeshStandardMaterial({ color: 0x881111, emissive: 0xff1a1a, emissiveIntensity: 2.2 });
+const headMat = new THREE.MeshStandardMaterial({ color: 0xfff6d8, emissive: 0xffe9a8, emissiveIntensity: 0.4 });
+const headMatOn = new THREE.MeshStandardMaterial({ color: 0xfff6d8, emissive: 0xffe9a8, emissiveIntensity: 2.4 });
 
-// Build a multi-part car: body, cabin with glass, bumpers, wheels that steer
-// and spin, brake lights, headlights, light bar for police.
-export function makeCarModel(type, colour, rng = mulberry32(1)) {
-  const spec = CAR_TYPES[type] || CAR_TYPES.sedan;
-  const group = new THREE.Group();
-  group.name = `car-${type}`;
-  const paint = new THREE.MeshStandardMaterial({ color: colour, roughness: 0.32, metalness: 0.55 });
-  const L = spec.len, W = spec.wid, H = spec.hgt;
-
-  const body = new THREE.Mesh(new THREE.BoxGeometry(L, H, W), paint);
-  body.position.y = 0.55 + H / 2;
-  body.castShadow = true; body.receiveShadow = true;
-  group.add(body);
-  // hood / boot shaping: a lower nose and tail lip
-  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.5, H * 0.55, W * 0.94), paint);
-  nose.position.set(L / 2 + 0.1, 0.55 + H * 0.32, 0);
-  nose.castShadow = true;
-  group.add(nose);
-  // cabin with glasshouse
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(L * 0.48, 0.55, W * 0.82), glassMat);
-  cabin.position.set(-L * 0.04, 0.55 + H + 0.24, 0);
-  cabin.castShadow = true;
-  group.add(cabin);
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(L * 0.5, 0.08, W * 0.86), paint);
-  roof.position.set(-L * 0.04, 0.55 + H + 0.55, 0);
-  roof.castShadow = true;
-  group.add(roof);
-  // bumpers + grille
-  const bumperMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.7 });
-  for (const sx of [L / 2 + 0.32, -L / 2 - 0.32]) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.3, W * 0.96), bumperMat);
-    b.position.set(sx, 0.42, 0);
-    group.add(b);
-  }
-  // headlights (emissive; weather turns them up at night) + brake lights
-  const headMat = new THREE.MeshStandardMaterial({ color: 0xfff6cf, emissive: 0xffe9a0, emissiveIntensity: 0.25 });
-  const brakeMat = new THREE.MeshStandardMaterial({ color: 0x7a0d0d, emissive: 0xff1a1a, emissiveIntensity: 0.15 });
-  for (const sz of [-W / 2 + 0.32, W / 2 - 0.32]) {
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.42), headMat);
-    hl.position.set(L / 2 + 0.36, 0.78, sz);
-    group.add(hl);
-    const bl = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.42), brakeMat);
-    bl.position.set(-L / 2 - 0.36, 0.78, sz);
-    group.add(bl);
-  }
-  // headlight cones at night (cheap fake: two translucent cones)
+export function makeCarModel(type, colorOverride) {
+  const def = CAR_TYPES[type] || CAR_TYPES.sedan;
+  const color = colorOverride ?? def.color;
+  const g = new THREE.Group();
+  const body = new THREE.Group();
+  g.add(body);
+  // bodi bawah + kap + bagasi (tiga volume = siluet tidak kaku)
+  const lower = new THREE.Mesh(new THREE.BoxGeometry(def.w, def.h, def.l), paint(color));
+  lower.position.y = 0.55; lower.castShadow = true; body.add(lower);
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(def.w * 0.92, 0.22, def.l * 0.24), paint(color));
+  hood.position.set(0, 0.92, def.l * 0.36); hood.castShadow = true; body.add(hood);
+  const trunk = new THREE.Mesh(new THREE.BoxGeometry(def.w * 0.92, 0.2, def.l * 0.2), paint(color));
+  trunk.position.set(0, 0.9, -def.l * 0.38); trunk.castShadow = true; body.add(trunk);
+  // kabin berkaca dengan pilar
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(def.w * 0.86, def.cabin, def.l * 0.46), glassMat);
+  cabin.position.set(0, 0.95 + def.cabin / 2, -def.l * 0.04); cabin.castShadow = true; body.add(cabin);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(def.w * 0.88, 0.08, def.l * 0.44), paint(color));
+  roof.position.set(0, 0.98 + def.cabin, -def.l * 0.04); roof.castShadow = true; body.add(roof);
+  // bumper + grille
+  const bumperF = new THREE.Mesh(new THREE.BoxGeometry(def.w * 0.98, 0.22, 0.18),
+    new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.5, metalness: 0.4 }));
+  bumperF.position.set(0, 0.38, def.l / 2); body.add(bumperF);
+  const bumperR = bumperF.clone(); bumperR.position.z = -def.l / 2; body.add(bumperR);
+  // lampu rem & lampu depan
+  const brakeL = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 0.06), lightOff.clone());
+  brakeL.position.set(-def.w / 2 + 0.3, 0.78, -def.l / 2 - 0.02); body.add(brakeL);
+  const brakeR = brakeL.clone(); brakeR.position.x = def.w / 2 - 0.3; body.add(brakeR);
+  const headL = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.13, 0.06), headMat.clone());
+  headL.position.set(-def.w / 2 + 0.3, 0.74, def.l / 2 + 0.02); body.add(headL);
+  const headR = headL.clone(); headR.position.x = def.w / 2 - 0.3; body.add(headR);
+  // lampu depan: kerucut cahaya (mesh transparan, menyala saat malam)
+  const coneGeo = new THREE.ConeGeometry(1.5, 7, 12, 1, true);
   const coneMat = new THREE.MeshBasicMaterial({
-    color: 0xffe9a0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
-    depthWrite: false, side: THREE.DoubleSide,
+    color: 0xffe9a8, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide,
   });
-  const cones = [];
-  for (const sz of [-0.55, 0.55]) {
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(1.1, 7, 12, 1, true), coneMat);
-    cone.rotation.z = -Math.PI / 2 - 0.18;
-    cone.position.set(L / 2 + 3.6, 0.7, sz);
-    group.add(cone);
-    cones.push(cone.material);
-  }
-  // taxi sign / police light bar
-  let lightBar = null;
+  const coneL = new THREE.Mesh(coneGeo, coneMat);
+  coneL.rotation.x = Math.PI / 2; coneL.position.set(-0.6, 0.6, def.l / 2 + 3.5); body.add(coneL);
+  const coneR = coneL.clone(); coneR.position.x = 0.6; body.add(coneR);
+  // taksi: papan atap; polisi: lightbar
   if (type === 'taxi') {
-    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.18, 0.4),
-      new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xffc400, emissiveIntensity: 0.8 }));
-    sign.position.set(-L * 0.04, 0.55 + H + 0.62, 0);
-    group.add(sign);
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.18, 0.3),
+      new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffc832, emissiveIntensity: 1.2 }));
+    sign.position.set(0, 1.06 + def.cabin, -def.l * 0.04); body.add(sign);
   }
+  let barL = null, barR = null;
   if (type === 'police') {
-    lightBar = new THREE.Group();
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 1.3),
-      new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 }));
-    bar.position.y = 0.55 + H + 0.62;
-    lightBar.add(bar);
-    const red = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.16, 0.55),
-      new THREE.MeshStandardMaterial({ color: 0xaa0000, emissive: 0xff0000, emissiveIntensity: 1 }));
-    red.position.set(0, 0.55 + H + 0.66, -0.32);
-    lightBar.add(red);
-    const blue = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.16, 0.55),
-      new THREE.MeshStandardMaterial({ color: 0x0000aa, emissive: 0x2244ff, emissiveIntensity: 1 }));
-    blue.position.set(0, 0.55 + H + 0.66, 0.32);
-    lightBar.add(blue);
-    lightBar.userData = { red: red.material, blue: blue.material };
-    group.add(lightBar);
-    // police livery stripe
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(L * 0.99, 0.2, W + 0.02),
-      new THREE.MeshStandardMaterial({ color: 0xe8e8e8, roughness: 0.4 }));
-    stripe.position.y = 0.85;
-    group.add(stripe);
+    const barMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 });
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.12, 0.3), barMat);
+    bar.position.set(0, 1.06 + def.cabin, -def.l * 0.04); body.add(bar);
+    barL = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.14, 0.32),
+      new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff0000, emissiveIntensity: 0.2 }));
+    barL.position.set(-0.28, 1.06 + def.cabin, -def.l * 0.04); body.add(barL);
+    barR = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.14, 0.32),
+      new THREE.MeshStandardMaterial({ color: 0x000022, emissive: 0x2244ff, emissiveIntensity: 0.2 }));
+    barR.position.set(0.28, 1.06 + def.cabin, -def.l * 0.04); body.add(barR);
+    const badge = new THREE.Mesh(new THREE.BoxGeometry(def.w * 0.9, 0.3, 0.02),
+      new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.5 }));
+    badge.position.set(0, 0.62, def.l / 2 + 0.01); body.add(badge);
   }
-  // wheels: steer the fronts, spin all four
+  // roda: berputar (rotasi x) & depan membelok (rotasi y via pivot)
   const wheels = [];
-  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.28, 14);
-  wheelGeo.rotateX(Math.PI / 2);
-  const hubGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.3, 10);
-  hubGeo.rotateX(Math.PI / 2);
-  for (const [wx, wz, front] of [
-    [L / 2 - 0.75, -W / 2 + 0.12, true], [L / 2 - 0.75, W / 2 - 0.12, true],
-    [-L / 2 + 0.75, -W / 2 + 0.12, false], [-L / 2 + 0.75, W / 2 - 0.12, false],
-  ]) {
-    const steer = new THREE.Group();
-    steer.position.set(wx, 0.36, wz);
+  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.26, 14);
+  wheelGeo.rotateZ(Math.PI / 2);
+  const positions = [
+    [-def.w / 2 + 0.08, def.l * 0.32, true], [def.w / 2 - 0.08, def.l * 0.32, true],
+    [-def.w / 2 + 0.08, -def.l * 0.32, false], [def.w / 2 - 0.08, -def.l * 0.32, false],
+  ];
+  for (const [wx, wz, front] of positions) {
+    const pivot = new THREE.Group();
+    pivot.position.set(wx, 0.36, wz);
     const tyre = new THREE.Mesh(wheelGeo, tyreMat);
     tyre.castShadow = true;
-    const hub = new THREE.Mesh(hubGeo, hubMat);
-    steer.add(tyre); steer.add(hub);
-    group.add(steer);
-    wheels.push({ steer, tyre, front });
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.28, 10), rimMat);
+    rim.rotation.z = Math.PI / 2;
+    pivot.add(tyre); pivot.add(rim);
+    g.add(pivot);
+    wheels.push({ pivot, tyre, front });
   }
-  group.userData = { spec, wheels, headMat, brakeMat, cones, lightBar, body };
-  return group;
-}
-
-// One drivable car: model + physics state. `driver` is 'player' | 'traffic'
-// | 'police' | 'parked' | null.
-export function createCar(scene, type, x, z, heading, colour, rng) {
-  const spec = CAR_TYPES[type] || CAR_TYPES.sedan;
-  const model = makeCarModel(type, colour, rng);
-  model.position.set(x, 0, z);
-  // The model is built nose-forward along +X; rotation.y = heading - PI/2
-  // maps that nose onto the physics forward (sin h, cos h).
-  model.rotation.y = heading - Math.PI / 2;
-  scene.add(model);
-  const car = {
-    type, spec, model,
-    pos: new THREE.Vector3(x, 0, z),
-    heading,
-    speed: 0,
-    steer: 0,
-    damage: 0,          // 0..1; smoke past 0.55, dead past 1
-    driver: null,
-    wanted: false,
-    brakeLight: 0,
-    smokeTimer: 0,
-    smoke: null,
-    update(dt, input, colliders) {
-      // input: { throttle: -1..1, steer: -1..1, handbrake: bool }
-      const top = spec.top;
-      if (input.throttle > 0) this.speed += spec.accel * input.throttle * dt;
-      else if (input.throttle < 0) {
-        if (this.speed > 0.5) this.speed -= CFG.carBrake * dt;
-        else this.speed = Math.max(this.speed - spec.accel * 0.6 * dt, -CFG.carReverseTop);
-      }
-      if (input.handbrake) this.speed *= Math.max(0, 1 - 3.2 * dt);
-      // drag + rolling resistance
-      this.speed -= this.speed * 0.55 * dt;
-      this.speed = clamp(this.speed, -CFG.carReverseTop, top);
-      const steerTarget = input.steer * clamp(Math.abs(this.speed) / 6, 0, 1) * 0.55;
-      this.steer = lerp(this.steer, steerTarget, Math.min(1, dt * 8));
-      const turn = this.steer * CFG.carGrip * (this.speed / top) * (this.speed >= 0 ? 1 : -1);
-      this.heading += turn * dt * (Math.abs(this.speed) > 0.2 ? 1 : 0);
-      const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
-      this.pos.x += fx * this.speed * dt;
-      this.pos.z += fz * this.speed * dt;
-      // world bounds
-      this.pos.x = clamp(this.pos.x, -CFG.worldHalf - 20, CFG.worldHalf);
-      this.pos.z = clamp(this.pos.z, -CFG.worldHalf, CFG.worldHalf);
-      // building collision: circle vs AABB, push out, lose speed, take damage
-      for (const c of colliders) {
-        const nx = clamp(this.pos.x, c.minX, c.maxX);
-        const nz = clamp(this.pos.z, c.minZ, c.maxZ);
-        const dx = this.pos.x - nx, dz = this.pos.z - nz;
-        const d2 = dx * dx + dz * dz;
-        if (d2 < CFG.carRadius * CFG.carRadius) {
-          const d = Math.sqrt(d2) || 0.01;
-          const push = CFG.carRadius - d;
-          this.pos.x += (dx / d) * push;
-          this.pos.z += (dz / d) * push;
-          if (Math.abs(this.speed) > 4) {
-            this.damage = Math.min(1, this.damage + Math.abs(this.speed) * 0.008);
-            this.onCrash?.(Math.abs(this.speed));
-          }
-          this.speed *= -0.25;
-        }
-      }
-      // body roll + pitch for weight
-      const u = this.model.userData;
-      this.model.position.copy(this.pos);
-      this.model.rotation.y = this.heading - Math.PI / 2;
-      this.model.rotation.z = -this.steer * 0.06 * clamp(Math.abs(this.speed) / 10, 0, 1);
-      this.model.rotation.x = clamp(-input.throttle * 0.02 * (this.speed > 1 ? 1 : 0), -0.03, 0.03)
-        + (input.throttle < 0 && this.speed > 1 ? 0.03 : 0);
-      // wheels: steer fronts, spin by speed
-      const spin = (this.speed * dt) / 0.36;
-      for (const w of u.wheels) {
-        if (w.front) w.steer.rotation.y = this.steer * 0.9;
-        w.tyre.rotation.z -= spin;
-      }
-      // brake lights
-      const braking = input.throttle < 0 && this.speed > 0.5;
-      u.brakeMat.emissiveIntensity = braking ? 2.4 : 0.15;
-      this.brakeLight = braking ? 1 : 0;
-      // damage smoke
-      if (this.damage > 0.55 && !this.smoke) {
-        this.smoke = makeSmoke(scene);
-      }
-      if (this.smoke) {
-        this.smokeTimer -= dt;
-        this.smoke.position.set(this.pos.x, 1.6, this.pos.z);
-        this.smoke.material.opacity = 0.25 + 0.35 * Math.abs(Math.sin(performance.now() * 0.004));
-        this.smoke.scale.setScalar(1 + this.damage * 0.8);
-      }
-    },
-    setNightLights(on) {
-      const u = this.model.userData;
-      u.headMat.emissiveIntensity = on ? 2.6 : 0.25;
-      for (const c of u.cones) c.opacity = on ? 0.10 : 0;
-    },
-    destroy() {
-      scene.remove(this.model);
-      if (this.smoke) scene.remove(this.smoke);
-    },
+  // asap kerusakan (sprite abu-abu, muncul saat damage tinggi)
+  const smokeMat = new THREE.SpriteMaterial({ color: 0x555555, transparent: true, opacity: 0, depthWrite: false });
+  const smoke = new THREE.Sprite(smokeMat);
+  smoke.scale.set(1.6, 1.6, 1); smoke.position.set(0, 1.2, def.l * 0.3);
+  g.add(smoke);
+  // blob shadow kontak
+  return {
+    group: g, body, wheels, brakeL, brakeR, headL, headR, coneMat,
+    barL, barR, smoke, smokeMat, def, type,
   };
-  return car;
 }
 
-function makeSmoke(scene) {
-  const geo = new THREE.SphereGeometry(0.9, 8, 6);
-  const mat = new THREE.MeshBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.3, depthWrite: false });
-  const m = new THREE.Mesh(geo, mat);
-  scene.add(m);
-  return m;
+// ---- kendaraan dinamis ----
+export function createVehicle(W, type, x, z, heading, opts = {}) {
+  const model = makeCarModel(type, opts.color);
+  model.group.position.set(x, 0, z);
+  model.group.rotation.y = heading;
+  W.scene.add(model.group);
+  const v = {
+    model, type, def: model.def,
+    pos: model.group.position,
+    heading, speed: 0, steer: 0,
+    damage: opts.damage || 0,
+    driver: opts.driver || null,      // 'player' | 'traffic' | 'police' | 'parked' | null
+    stolen: false,
+    brakeLight: false, headlights: false,
+    ai: opts.ai || null,              // {waypoints, idx, speed}
+    update(dt, input) { updateVehicle(W, v, dt, input); },
+    dispose() { W.scene.remove(model.group); },
+  };
+  return v;
+}
+
+function updateVehicle(W, v, dt, input) {
+  const def = v.def;
+  if (v.driver === 'player' && input) {
+    const fwd = input.forward ? 1 : 0, back = input.back ? 1 : 0;
+    const targetSteer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
+    v.steer += (targetSteer * CFG.steerMax - v.steer) * Math.min(1, dt * 8);
+    const accel = fwd ? CFG.carAccel * def.accel : 0;
+    const brake = back ? CFG.carBrake : 0;
+    if (fwd) v.speed += accel * dt;
+    if (back) {
+      if (v.speed > 0.5) v.speed -= brake * dt;
+      else v.speed -= CFG.carAccel * 0.5 * dt;
+    }
+    if (!fwd && !back) v.speed -= Math.sign(v.speed) * Math.min(Math.abs(v.speed), 8 * dt);
+    if (input.handbrake) v.speed -= Math.sign(v.speed) * Math.min(Math.abs(v.speed), 26 * dt);
+    const maxF = def.top, maxR = CFG.carMaxReverse;
+    v.speed = Math.max(-maxR, Math.min(maxF, v.speed));
+    const grip = input.handbrake ? CFG.handbrakeGrip : CFG.grip;
+    v.heading += (v.steer * (v.speed / 9)) * dt * (v.speed >= 0 ? 1 : -1) * (grip / CFG.grip);
+    v.brakeLight = back || input.handbrake;
+  } else if (v.ai) {
+    // AI: kejar waypoint, rem bila mobil di depan terlalu dekat
+    const wp = v.ai.waypoints[v.ai.idx];
+    const dx = wp.x - v.pos.x, dz = wp.z - v.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 4) v.ai.idx = (v.ai.idx + 1) % v.ai.waypoints.length;
+    const want = Math.atan2(dx, dz);
+    let dh = want - v.heading;
+    while (dh > Math.PI) dh -= Math.PI * 2;
+    while (dh < -Math.PI) dh += Math.PI * 2;
+    v.steer += (Math.max(-CFG.steerMax, Math.min(CFG.steerMax, dh * 1.4)) - v.steer) * Math.min(1, dt * 5);
+    const slow = v.ai.slowFor ? 0.45 : 1;
+    const target = v.ai.speed * slow;
+    v.speed += (target - v.speed) * Math.min(1, dt * 1.6);
+    v.heading += (v.steer * (v.speed / 9)) * dt;
+    v.brakeLight = slow < 1;
+  }
+  // gerak + tabrakan gedung
+  const nx = v.pos.x + Math.sin(v.heading) * v.speed * dt;
+  const nz = v.pos.z + Math.cos(v.heading) * v.speed * dt;
+  const oldX = v.pos.x, oldZ = v.pos.z;
+  v.pos.x = nx; v.pos.z = nz;
+  const hit = collideCircle(v.pos, 1.5, W.city.colliders);
+  if (hit) {
+    if (Math.abs(v.speed) > 6 && v.driver === 'player') {
+      W.events.emit('crash', { speed: Math.abs(v.speed) });
+      v.damage += Math.abs(v.speed) * 0.6;
+    }
+    v.speed *= 0.35;
+    v.pos.x = oldX; v.pos.z = oldZ;
+    collideCircle(v.pos, 1.5, W.city.colliders);
+  }
+  // batas dunia
+  v.pos.x = Math.max(-260, Math.min(260, v.pos.x));
+  v.pos.z = Math.max(-190, Math.min(200, v.pos.z));
+  // visual: body roll/pitch, roda, lampu
+  v.model.group.rotation.y = v.heading;
+  const roll = -v.steer * Math.min(1, Math.abs(v.speed) / 30) * 0.06;
+  const pitch = (v.driver === 'player' && input && input.back ? 0.03 : 0) - Math.min(0.04, Math.abs(v.speed) * 0.0006);
+  v.model.body.rotation.z = roll;
+  v.model.body.rotation.x = pitch;
+  for (const w of v.model.wheels) {
+    w.tyre.rotation.x += (v.speed * dt) / 0.36;
+    if (w.front) w.pivot.rotation.y = v.steer * 0.9;
+  }
+  const braking = v.brakeLight;
+  v.model.brakeL.material.emissiveIntensity = braking ? 2.2 : 0.15;
+  v.model.brakeR.material.emissiveIntensity = braking ? 2.2 : 0.15;
+  const night = W.weather ? W.weather.nightFactor() : 0;
+  const heads = v.headlights || night > 0.5;
+  v.model.headL.material.emissiveIntensity = heads ? 2.4 : 0.4;
+  v.model.headR.material.emissiveIntensity = heads ? 2.4 : 0.4;
+  v.model.coneMat.opacity = heads ? 0.07 : 0;
+  // asap kerusakan
+  const dmg = Math.min(1, v.damage / 60);
+  v.model.smokeMat.opacity = dmg > 0.25 ? (dmg - 0.2) * 0.7 : 0;
+  if (v.model.smokeMat.opacity > 0) {
+    v.model.smoke.position.y = 1.2 + Math.sin(W.time * 7) * 0.15;
+    v.model.smoke.scale.setScalar(1.4 + dmg * 1.6 + Math.sin(W.time * 9) * 0.2);
+  }
 }

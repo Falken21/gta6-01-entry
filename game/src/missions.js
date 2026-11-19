@@ -1,256 +1,228 @@
 // Costa Serena — missions.js
-// One job: the story chain and side work. Five missions for Rafi, the boat
-// mechanic whose brother owes the wrong people money — deliveries, escapes,
-// a taxi shift, a coastal race, a night boat job — plus repeatable taxi
-// fares, street races and package pickups. Every mission carries a
-// SECONDARY objective: hit it and the payout grows by a bonus.
-import * as THREE from 'three';
-import { CFG, clamp } from './config.js';
+// Rantai cerita 5 misi + pekerjaan sampingan (taksi, balap, paket kilat).
+// Tiap misi: langkah checkpoint, timer, hadiah cash, dan OBJEKTIF SEKUNDER
+// dengan bonus cash (paket kedua, kabur tanpa tabrakan, par time, peti,
+// mobil utuh). Progres tersimpan antar sesi.
+import * as THREE from '../vendor/three.module.min.js';
+import { CFG, MISSIONS, SIDE_JOBS } from './config.js';
 
-const MISSION_DEFS = [
-  {
-    id: 1, name: 'Pengiriman Pertama', giver: 'Dario',
-    brief: 'Bawa paket Dario ke gudang selatan. Jangan sampai rusak.',
-    secondary: 'Tanpa goresan: antar tanpa merusak mobil',
-    stages: [
-      { type: 'goto', label: 'Ambil paket di bengkel Dario', x: 30, z: 88 },
-      { type: 'goto', label: 'Antar paket ke gudang selatan', x: -20, z: -176, timer: 150 },
-    ],
-  },
-  {
-    id: 2, name: 'Pelarian Marina', giver: 'Dario',
-    brief: 'Polisi mengendus. Kabur dari kejaran dan sampai ke rumah aman.',
-    secondary: 'Sampai dalam 90 detik',
-    stages: [
-      { type: 'escape', label: 'Kabur! Hilangkan kejaran polisi', x: 132, z: -132, wanted: 2 },
-      { type: 'goto', label: 'Sampai ke rumah aman', x: 132, z: -132, timer: 120 },
-    ],
-  },
-  {
-    id: 3, name: 'Taksi Kilat', giver: 'Mira',
-    brief: 'Mira butuh sopir pengganti. Antar dua penumpang tepat waktu.',
-    secondary: 'Tanpa tabrakan selama shift',
-    stages: [
-      { type: 'goto', label: 'Jemput penumpang di alun-alun', x: 88, z: 44 },
-      { type: 'goto', label: 'Antar ke hotel pantai', x: -176, z: 132, timer: 120 },
-      { type: 'goto', label: 'Jemput penumpang kedua di stasiun', x: -44, z: -44 },
-      { type: 'goto', label: 'Antar ke marina', x: -176, z: 44, timer: 120 },
-    ],
-  },
-  {
-    id: 4, name: 'Balapan Pesisir', giver: 'Kiko',
-    brief: 'Kiko menantangmu balapan menyusuri pesisir. Lewati semua gerbang.',
-    secondary: 'Kalahkan 75 detik',
-    stages: [
-      { type: 'race', label: 'Gerbang 1: ujung boulevard', x: -176, z: -176, timer: 75 },
-      { type: 'race', label: 'Gerbang 2: tanjakan marina', x: -176, z: 176 },
-      { type: 'race', label: 'Gerbang 3: garis finis alun-alun', x: 44, z: 44 },
-    ],
-  },
-  {
-    id: 5, name: 'Pekerjaan Terakhir', giver: 'Dario',
-    brief: 'Malam ini, hujan. Bawa perahu ke dermaga utara dan selesaikan utang kakakmu.',
-    secondary: 'Tanpa bintang wanted saat penyerahan',
-    stages: [
-      { type: 'goto', label: 'Temui Dario di dermaga marina', x: -196, z: 40, night: true },
-      { type: 'goto', label: 'Antar muatan ke dermaga utara', x: -196, z: -176, timer: 180 },
-    ],
-  },
-];
-
-export function createMissions(scene, city) {
-  // Objective beacon: a glowing pillar the player can see across the city.
-  const beaconMat = new THREE.MeshBasicMaterial({
-    color: 0xffc400, transparent: true, opacity: 0.5, depthWrite: false,
-  });
-  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 30, 16, 1, true), beaconMat);
+export function createMissions(W) {
+  const state = {
+    idx: W.save.data.missionIdx || 0,
+    step: 0,
+    active: false,
+    timer: 0,
+    secondaryDone: false,
+    secondaryFailed: false,
+    sideJob: null,          // {kind, from, to, timer, fare}
+    cratesGot: 0,
+    crashFree: true,
+    startDamage: 0,
+    raceStart: 0,
+  };
+  // penanda 3D: suar + panah melayang di checkpoint
+  const beaconMat = new THREE.MeshBasicMaterial({ color: 0xffd23a, transparent: true, opacity: 0.55, depthWrite: false });
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 26, 16, 1, true), beaconMat);
   beacon.visible = false;
-  scene.add(beacon);
-  const ringMat = new THREE.MeshBasicMaterial({
-    color: 0xffc400, transparent: true, opacity: 0.65, side: THREE.DoubleSide, depthWrite: false,
-  });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(2.4, 3.4, 24), ringMat);
+  W.scene.add(beacon);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd23a, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(2.2, 3.0, 24), ringMat);
   ring.rotation.x = -Math.PI / 2;
   ring.visible = false;
-  scene.add(ring);
+  W.scene.add(ring);
+  const crates = [];
+  const crateMat = new THREE.MeshStandardMaterial({ color: 0x8a5a28, roughness: 0.85 });
 
-  const state = {
-    unlocked: 1,          // highest mission available (1-based)
-    active: null,         // { def, stage, timer, startDamage, startTime, secondaryOk }
-    cash: 0,
-    completed: [],
-    side: null,           // repeatable side job
-    message: '',
-  };
+  function current() { return MISSIONS[state.idx] || null; }
+  function currentStep() { const m = current(); return m ? m.steps[state.step] : null; }
+  function stepPos(step) { return { x: step.at[0], z: step.at[1] }; }
 
-  function startMission(idx, ctx) {
-    const def = MISSION_DEFS[idx - 1];
-    if (!def) return false;
-    state.active = {
-      def, stage: 0, timer: def.stages[0].timer || 0,
-      startDamage: ctx.playerCar ? ctx.playerCar.damage : 0,
-      startTime: ctx.time,
-      secondaryOk: true,
-      elapsed: 0,
-    };
-    if (def.stages[0].wanted) ctx.police.wanted = Math.max(ctx.police.wanted, def.stages[0].wanted);
-    placeBeacon(def.stages[0]);
-    state.message = `Misi ${def.id}: ${def.name} — ${def.brief}`;
-    return true;
+  function startMission(i) {
+    state.idx = i; state.step = 0; state.active = true;
+    state.secondaryDone = false; state.secondaryFailed = false;
+    state.cratesGot = 0; state.crashFree = true; state.startDamage = W.player.car ? W.player.car.damage : 0;
+    const m = current();
+    W.hud.toast(`MISI: ${m.title} — ${m.giver}`, 'info');
+    W.hud.setObjective(m.steps[0].label, m.secondary ? m.secondary.label : '');
+    W.audio.missionStart();
+    updateBeacon();
   }
-
-  function placeBeacon(stage) {
-    beacon.position.set(stage.x, 15, stage.z);
-    ring.position.set(stage.x, 0.06, stage.z);
-    beacon.visible = true;
-    ring.visible = true;
+  function updateBeacon() {
+    const step = currentStep();
+    if (!state.active || !step || !step.at) { beacon.visible = false; ring.visible = false; return; }
+    beacon.visible = true; ring.visible = true;
+    beacon.position.set(step.at[0], 13, step.at[1]);
+    ring.position.set(step.at[0], 0.1, step.at[1]);
   }
-  function hideBeacon() { beacon.visible = false; ring.visible = false; }
-
-  function currentTarget() {
-    if (!state.active) return null;
-    const st = state.active.def.stages[state.active.stage];
-    return st ? { x: st.x, z: st.z, label: st.label } : null;
-  }
-
-  function completeMission(ctx) {
-    const a = state.active;
-    const base = CFG.missionCash[a.def.id - 1];
+  function completeMission() {
+    const m = current();
+    let reward = m.reward;
     let bonus = 0;
-    if (a.secondaryOk) bonus = CFG.secondaryBonus[a.def.id - 1];
-    state.cash += base + bonus;
-    state.completed.push(a.def.id);
-    state.unlocked = Math.min(MISSION_DEFS.length, Math.max(state.unlocked, a.def.id + 1));
-    state.message = bonus > 0
-      ? `Misi selesai! +$${base} + bonus objektif sekunder $${bonus}`
-      : `Misi selesai! +$${base}`;
-    ctx.onCash?.(state.cash);
-    state.active = null;
-    hideBeacon();
+    if (state.secondaryDone) bonus = m.secondary.reward;
+    W.player.cash += reward + bonus;
+    W.hud.toast(`MISI SELESAI: ${m.title} +$${reward}${bonus ? ` (bonus +$${bonus})` : ''}`, 'good');
+    W.audio.missionDone();
+    W.save.data.missionIdx = Math.min(MISSIONS.length - 1, state.idx + 1);
+    W.save.data.cash = W.player.cash;
+    W.save.write();
+    state.active = false;
+    beacon.visible = false; ring.visible = false;
+    W.hud.setObjective('Misi selesai. Tekan N untuk misi berikutnya.', '');
+    if (state.idx >= MISSIONS.length - 1) {
+      W.hud.toast('CERITA TAMAT — Rafi bebas. Terima kasih sudah bermain!', 'good');
+    }
   }
-
   function failMission(reason) {
-    state.message = `Misi gagal: ${reason}`;
-    state.active = null;
-    hideBeacon();
+    W.hud.toast(`MISI GAGAL: ${reason}`, 'bad');
+    state.active = false;
+    beacon.visible = false; ring.visible = false;
+    W.hud.setObjective('Misi gagal. Tekan N untuk mengulang.', '');
+  }
+  function checkSecondary(step) {
+    const m = current();
+    if (!m || !m.secondary || state.secondaryDone) return;
+    const s = m.secondary;
+    if (s.noCrash && !state.crashFree) state.secondaryFailed = true;
+    if (s.noDamage && W.player.car && W.player.car.damage > state.startDamage + 5) state.secondaryFailed = true;
+  }
+  function spawnCrates() {
+    for (const c of crates) W.scene.remove(c.g);
+    crates.length = 0;
+    for (let i = 0; i < 3; i++) {
+      const g = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), crateMat);
+      g.position.set(-90 + i * 60 + (W.rng() - 0.5) * 20, 0.6, 185 + (W.rng() - 0.5) * 10);
+      g.castShadow = true;
+      W.scene.add(g);
+      crates.push({ g, got: false });
+    }
   }
 
-  function update(dt, ctx) {
-    // beacon pulse
+  function update(dt, t) {
+    // pekerjaan sampingan: taksi — penumpang menunggu di tepi jalan
+    if (!state.sideJob && !state.active && W.rng() < dt * 0.02 && W.player.car) {
+      startSideJob('taxi');
+    }
+    if (state.sideJob) updateSideJob(dt);
+    if (!state.active) return;
+    const m = current();
+    const step = currentStep();
+    if (!step) return;
+    if (step.time && !state.timer) state.timer = step.time;
+    if (state.timer) {
+      state.timer -= dt;
+      if (state.timer <= 0) { failMission('waktu habis'); return; }
+    }
+    // peti misi 4
+    if (m.id === 'm4' && state.step === 1 && crates.length === 0) spawnCrates();
+    for (const c of crates) {
+      if (!c.got && Math.hypot(W.player.pos.x - c.g.position.x, W.player.pos.z - c.g.position.z) < 4) {
+        c.got = true; c.g.visible = false;
+        state.cratesGot++;
+        W.hud.toast(`Peti ${state.cratesGot}/3 didapat!`, 'good');
+        if (state.cratesGot >= 3) state.secondaryDone = true;
+      }
+    }
+    const px = W.player.pos.x, pz = W.player.pos.z;
+    if (step.kind === 'goto' || step.kind === 'race' || step.kind === 'boat') {
+      const d = Math.hypot(px - step.at[0], pz - step.at[1]);
+      W.hud.setObjectiveDistance(d);
+      if (d < 5) {
+        if (step.kind === 'boat' && state.step === 0) {
+          // naik perahu: teleport ringan ke perahu & lanjut
+          W.hud.toast('Naik perahu…', 'info');
+        }
+        if (m.id === 'm3' && state.step === 2 && state.raceStart) {
+          const elapsed = t - state.raceStart;
+          if (elapsed < 55) state.secondaryDone = true;
+        }
+        if (m.id === 'm3' && state.step === 0) state.raceStart = t;
+        state.step++;
+        checkSecondary(step);
+        if (state.step >= m.steps.length) {
+          if (m.secondary && m.secondary.noCrash && state.crashFree) state.secondaryDone = true;
+          if (m.secondary && m.secondary.noDamage && W.player.car && W.player.car.damage <= state.startDamage + 5) state.secondaryDone = true;
+          completeMission();
+        } else {
+          W.hud.setObjective(m.steps[state.step].label, m.secondary ? m.secondary.label : '');
+          W.audio.checkpoint();
+          updateBeacon();
+        }
+      }
+    } else if (step.kind === 'escape') {
+      if (step.heat && W.police.wanted < step.heat && !state.escArmed) {
+        W.police.addHeat(step.heat, 'misi: ' + m.title);
+        state.escArmed = true;
+      }
+      const hold = step.hold || 0;
+      if (W.police.wanted === 0) {
+        state.escapeT = (state.escapeT || 0) + dt;
+        W.hud.setObjective(`Bersembunyi… ${Math.ceil(hold - (state.escapeT || 0))} dtk`, '');
+        if ((state.escapeT || 0) >= hold) {
+          state.step++;
+          if (step.at) {
+            // lanjut ke checkpoint akhir
+            W.hud.setObjective(m.steps[state.step].label, '');
+            updateBeacon();
+          } else {
+            if (m.secondary && m.secondary.noCrash && state.crashFree) state.secondaryDone = true;
+            completeMission();
+          }
+        }
+      } else { state.escapeT = 0; W.hud.setObjective(step.label, m.secondary ? m.secondary.label : ''); }
+    }
+    // animasi suar
     if (beacon.visible) {
-      beaconMat.opacity = 0.35 + 0.2 * Math.sin(ctx.time * 3);
-      ring.scale.setScalar(1 + 0.12 * Math.sin(ctx.time * 3));
-    }
-    const a = state.active;
-    if (!a) return;
-    a.elapsed += dt;
-    const stage = a.def.stages[a.stage];
-    // secondary-objective watchers
-    if (a.def.id === 1 && ctx.playerCar && ctx.playerCar.damage > a.startDamage + 0.05) a.secondaryOk = false;
-    if (a.def.id === 2 && a.elapsed > 90 && a.stage === 1) a.secondaryOk = false;
-    if (a.def.id === 3 && ctx.crashCount > 0) a.secondaryOk = false;
-    if (a.def.id === 4 && a.elapsed > 75) a.secondaryOk = false;
-    if (a.def.id === 5 && ctx.police.stars() > 0) a.secondaryOk = false;
-    if (stage.timer) {
-      a.timer -= dt;
-      if (a.timer <= 0) { failMission('waktu habis'); return; }
-    }
-    const px = ctx.playerCar ? ctx.playerCar.pos.x : ctx.player.pos.x;
-    const pz = ctx.playerCar ? ctx.playerCar.pos.z : ctx.player.pos.z;
-    const dist = Math.hypot(px - stage.x, pz - stage.z);
-    if (stage.type === 'escape') {
-      // escape stage completes when wanted drops to zero
-      if (ctx.police.stars() === 0) {
-        a.stage++;
-        if (a.stage >= a.def.stages.length) { completeMission(ctx); return; }
-        const next = a.def.stages[a.stage];
-        a.timer = next.timer || 0;
-        placeBeacon(next);
-        state.message = next.label;
-      }
-      return;
-    }
-    if (dist < 6) {
-      a.stage++;
-      if (a.stage >= a.def.stages.length) { completeMission(ctx); return; }
-      const next = a.def.stages[a.stage];
-      a.timer = next.timer || 0;
-      placeBeacon(next);
-      state.message = next.label;
-      if (next.night) ctx.setNightMission?.();
+      beacon.rotation.y += dt;
+      beaconMat.opacity = 0.4 + Math.sin(t * 4) * 0.15;
+      const s = 1 + Math.sin(t * 3) * 0.08;
+      ring.scale.set(s, s, 1);
     }
   }
 
-  // ---- Side activities -----------------------------------------------------
-  function startTaxiFare(ctx) {
-    if (state.active || state.side) return false;
-    const spots = [
-      { x: 88, z: 44 }, { x: -44, z: -44 }, { x: 132, z: 88 },
-      { x: -88, z: 132 }, { x: 44, z: -132 }, { x: -132, z: -88 },
-    ];
-    const pick = spots[Math.floor(Math.random() * spots.length)];
-    const drop = spots[Math.floor(Math.random() * spots.length)];
-    state.side = { kind: 'taxi', stage: 0, pickup: pick, drop, timer: 100, reward: 120 };
-    placeBeacon({ x: pick.x, z: pick.z });
-    state.message = 'Penumpang menunggu — jemput dia!';
-    return true;
+  function startSideJob(kind) {
+    const px = W.player.pos.x, pz = W.player.pos.z;
+    const ax = CFG.avenues[Math.floor(W.rng() * CFG.avenues.length)];
+    const sz = CFG.streets[Math.floor(W.rng() * CFG.streets.length)];
+    const dest = { x: ax + (W.rng() - 0.5) * 20, z: sz + (W.rng() - 0.5) * 20 };
+    state.sideJob = { kind, to: dest, timer: 90 };
+    W.hud.toast(`KERJA SAMPINGAN: ${SIDE_JOBS[kind].label} (+$${SIDE_JOBS[kind].reward})`, 'info');
+    W.hud.setObjective(`${SIDE_JOBS[kind].label} — ke penanda kuning`, '');
+    beacon.visible = true; ring.visible = true;
+    beacon.position.set(dest.x, 13, dest.z);
+    ring.position.set(dest.x, 0.1, dest.z);
   }
-  function startPackage(ctx) {
-    if (state.active || state.side) return false;
-    const spots = [
-      { x: -88, z: 88 }, { x: 132, z: -44 }, { x: -44, z: 176 }, { x: 176, z: -88 },
-    ];
-    const p = spots[Math.floor(Math.random() * spots.length)];
-    state.side = { kind: 'package', stage: 0, pickup: p, drop: null, timer: 90, reward: 90 };
-    placeBeacon({ x: p.x, z: p.z });
-    state.message = 'Paket menunggu diambil.';
-    return true;
-  }
-  function updateSide(dt, ctx) {
-    const s = state.side;
-    if (!s) return;
-    s.timer -= dt;
-    if (s.timer <= 0) { state.message = 'Pekerjaan sampingan gagal: waktu habis.'; state.side = null; hideBeacon(); return; }
-    const px = ctx.playerCar ? ctx.playerCar.pos.x : ctx.player.pos.x;
-    const pz = ctx.playerCar ? ctx.playerCar.pos.z : ctx.player.pos.z;
-    const target = s.stage === 0 ? s.pickup : s.drop;
-    if (!target) return;
-    if (Math.hypot(px - target.x, pz - target.z) < 6) {
-      if (s.kind === 'taxi' && s.stage === 0) {
-        s.stage = 1; s.timer = 110;
-        placeBeacon({ x: s.drop.x, z: s.drop.z });
-        state.message = 'Penumpang naik. Antar ke tujuan!';
-      } else {
-        state.cash += s.reward;
-        state.message = `Pekerjaan selesai! +$${s.reward}`;
-        ctx.onCash?.(state.cash);
-        state.side = null;
-        hideBeacon();
-      }
+  function updateSideJob(dt) {
+    const j = state.sideJob;
+    j.timer -= dt;
+    const d = Math.hypot(W.player.pos.x - j.to.x, W.player.pos.z - j.to.z);
+    W.hud.setObjectiveDistance(d);
+    if (d < 5) {
+      W.player.cash += SIDE_JOBS[j.kind].reward;
+      W.hud.toast(`Kerja sampingan selesai +$${SIDE_JOBS[j.kind].reward}`, 'good');
+      state.sideJob = null;
+      beacon.visible = false; ring.visible = false;
+      if (!state.active) W.hud.setObjective('Tekan N untuk misi berikutnya.', '');
+    } else if (j.timer <= 0) {
+      W.hud.toast('Kerja sampingan dibatalkan (waktu habis).', 'bad');
+      state.sideJob = null;
+      beacon.visible = false; ring.visible = false;
     }
   }
-
-  function objectiveText() {
-    if (state.active) {
-      const a = state.active;
-      const st = a.def.stages[a.stage];
-      const timer = st.timer ? ` — ${Math.ceil(a.timer)} dtk` : '';
-      const sec = a.secondaryOk ? ` ★ Sekunder: ${a.def.secondary}` : '';
-      return `${a.def.name}: ${st.label}${timer}${sec}`;
-    }
-    if (state.side) {
-      const s = state.side;
-      const t = s.stage === 0 ? s.pickup : s.drop;
-      return `${s.kind === 'taxi' ? 'Taksi' : 'Paket'}: ${s.stage === 0 ? 'jemput' : 'antar'} (${Math.ceil(s.timer)} dtk)`;
-    }
-    const next = MISSION_DEFS[state.unlocked - 1];
-    if (!next) return 'Semua misi selesai! Jelajahi kota — taksi (T) & paket (P) tersedia.';
-    return `Misi ${next.id} tersedia: ${next.name} — tekan M untuk mulai`;
+  function nextMission() {
+    if (state.active) return;
+    const i = state.idx >= MISSIONS.length - 1 && W.save.data.missionIdx >= MISSIONS.length - 1
+      ? MISSIONS.length - 1 : state.idx;
+    startMission(i);
   }
+  function onCrash() { state.crashFree = false; }
 
   return {
-    state, defs: MISSION_DEFS, startMission, completeMission, failMission,
-    update, updateSide, currentTarget, objectiveText, startTaxiFare, startPackage,
-    hideBeacon,
+    state, current, currentStep, startMission, update, nextMission, onCrash,
+    get objectivePos() {
+      const s = currentStep();
+      if (state.active && s && s.at) return { x: s.at[0], z: s.at[1] };
+      if (state.sideJob) return state.sideJob.to;
+      return null;
+    },
   };
 }
