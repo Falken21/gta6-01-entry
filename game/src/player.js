@@ -1,74 +1,116 @@
 // Costa Serena — player.js
-// On-foot third-person controller: walk/run, orbit camera with collision
-// (pulled in by buildings), entering/exiting cars (E).
-import * as THREE from '../vendor/three.module.min.js';
-import { PLAYER, clamp, lerp } from './config.js';
-import { buildPedestrian } from './pedestrians.js';
+// Rafi di jalan kaki: kontrol third-person, kamera orbit, masuk/keluar mobil.
+// Pejalan kaki Rafi memakai mesh terartikulasi yang sama dengan warga kota,
+// tapi berjaket teal khas agar mudah dikenali di screenshot.
+import { CFG, clamp, dist2 } from './config.js';
+import { buildPedestrianMesh } from './pedestrians.js';
+import { makeRng } from './config.js';
+import { nearestVehicle } from './traffic.js';
+import { resolveColliders } from './city.js';
 
-export class Player {
-  constructor(scene, city) {
-    this.scene = scene; this.city = city;
-    const p = buildPedestrian(7);
-    // Rafi: teal shirt, dark jeans — consistent lead character
-    p.group.children.forEach(() => {});
-    this.model = p;
-    this.group = p.group;
-    this.group.position.set(10, 0, 10);
-    scene.add(this.group);
-    this.x = 10; this.z = 10; this.heading = 0;
-    this.vel = new THREE.Vector3();
-    this.camYaw = 0; this.camPitch = 0.42; this.camDist = 7;
-    this.health = PLAYER.health;
-    this.inCar = null; this.walkPhase = 0;
+export function createPlayer(S, THREE) {
+  const rng = makeRng(CFG.seed + 99);
+  const mesh = buildPedestrianMesh(THREE, rng);
+  // jaket teal khas Rafi: ganti warna torso
+  mesh.children.forEach((c) => { /* torso tetap dari builder; identitas via penanda */ });
+  mesh.traverse((o) => { if (o.isMesh && o.geometry && o.geometry.parameters && o.geometry.parameters.width === 0.46) o.material = new THREE.MeshStandardMaterial({ color: 0x0e7a6e, roughness: 0.85 }); });
+  mesh.position.set(S.spawns.player.x, 0, S.spawns.player.z);
+  S.scene.add(mesh);
+  const p = {
+    mesh, x: S.spawns.player.x, z: S.spawns.player.z,
+    angle: S.spawns.player.angle, speed: 0,
+    health: CFG.playerHealthMax, cash: 0,
+    onFoot: true, vehicle: null, phase: 0,
+    camYaw: S.spawns.player.angle, camPitch: 0.32, camDist: 7,
+  };
+  S.player = p;
+  return p;
+}
+
+export function updatePlayerOnFoot(S, dt) {
+  const p = S.player;
+  const input = S.input;
+  const run = input.run ? CFG.runSpeed : CFG.walkSpeed;
+  let mx = 0, mz = 0;
+  if (input.forward) mz += 1;
+  if (input.back) mz -= 1;
+  if (input.left) mx -= 1;
+  if (input.right) mx += 1;
+  const moving = mx !== 0 || mz !== 0;
+  if (moving) {
+    const len = Math.hypot(mx, mz);
+    mx /= len; mz /= len;
+    // gerak relatif terhadap arah kamera
+    const sin = Math.sin(p.camYaw), cos = Math.cos(p.camYaw);
+    const wx = (mx * cos + mz * sin);
+    const wz = (-mx * sin + mz * cos);
+    const targetAngle = Math.atan2(wx, wz);
+    let diff = targetAngle - p.angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    p.angle += clamp(diff, -8 * dt, 8 * dt);
+    p.speed = run;
+    p.x += Math.sin(p.angle) * p.speed * dt;
+    p.z += Math.cos(p.angle) * p.speed * dt;
+    p.phase += dt * (input.run ? 11 : 7);
+  } else {
+    p.speed = 0;
   }
-  get pos() { return { x: this.x, z: this.z }; }
-  update(dt, keys, t) {
-    if (this.inCar) return;
-    const run = keys['shift'] ? PLAYER.run : PLAYER.walk;
-    let fx = 0, fz = 0;
-    if (keys['w'] || keys['arrowup']) fz -= 1;
-    if (keys['s'] || keys['arrowdown']) fz += 1;
-    if (keys['a'] || keys['arrowleft']) fx -= 1;
-    if (keys['d'] || keys['arrowright']) fx += 1;
-    const moving = fx !== 0 || fz !== 0;
-    if (moving) {
-      // move relative to camera yaw
-      const sin = Math.sin(this.camYaw), cos = Math.cos(this.camYaw);
-      const dx = (fx * cos - fz * sin), dz = (fx * sin + fz * cos);
-      const len = Math.hypot(dx, dz) || 1;
-      const tx = this.x + (dx / len) * run * dt, tz = this.z + (dz / len) * run * dt;
-      const hit = this.city.collide(tx, tz, PLAYER.radius);
-      if (!hit) { this.x = tx; this.z = tz; }
-      else { // slide along the wall instead of sticking
-        if (!this.city.collide(tx, this.z, PLAYER.radius)) this.x = tx;
-        else if (!this.city.collide(this.x, tz, PLAYER.radius)) this.z = tz;
-      }
-      this.x = clamp(this.x, -265, 265); this.z = clamp(this.z, -265, 265);
-      this.heading = Math.atan2(dx, dz);
-      this.walkPhase += dt * run * 1.6;
+  const probe = { x: p.x, z: p.z };
+  resolveColliders(S, probe, 0.5);
+  p.x = probe.x; p.z = probe.z;
+  // animasi jalan
+  const swing = moving ? Math.sin(p.phase) * 0.6 : 0;
+  const ud = p.mesh.userData;
+  ud.legs[0].rotation.x = swing;
+  ud.legs[1].rotation.x = -swing;
+  ud.arms[0].rotation.x = -swing * 0.8;
+  ud.arms[1].rotation.x = swing * 0.8;
+  p.mesh.position.set(p.x, 0, p.z);
+  p.mesh.rotation.y = p.angle;
+  // tabrakan dengan mobil lalu lintas: dorong + damage kecil
+  for (const v of S.traffic) {
+    if (Math.abs(v.speed) > 2 && dist2(p.x, p.z, v.x, v.z) < 1.8) {
+      p.health = Math.max(0, p.health - 12);
+      p.x += Math.sin(v.angle) * 2; p.z += Math.cos(v.angle) * 2;
+      S.setDanger && S.setDanger(v.x, v.z, 14, 2);
+      S.toast && S.toast('Kamu tertabrak!');
     }
-    this.group.position.set(this.x, 0, this.z);
-    this.group.rotation.y = this.heading;
-    const swing = moving ? Math.sin(this.walkPhase) * 0.55 : 0;
-    this.model.legL.rotation.x = swing; this.model.legR.rotation.x = -swing;
-    this.model.armL.rotation.x = -swing * 0.8; this.model.armR.rotation.x = swing * 0.8;
   }
-  // third-person camera: orbit, pitch, pulled in when a building blocks the ray
-  cameraTarget(out) {
-    const cx = this.x - Math.sin(this.camYaw) * Math.cos(this.camPitch) * this.camDist;
-    const cz = this.z - Math.cos(this.camYaw) * Math.cos(this.camPitch) * this.camDist;
-    const cy = 2.2 + Math.sin(this.camPitch) * this.camDist;
-    // shrink distance if a building sits between camera and player
-    let dist = this.camDist;
-    for (let f = 0.3; f <= 1; f += 0.1) {
-      const px = lerp(this.x, cx, f), pz = lerp(this.z, cz, f);
-      if (this.city.collide(px, pz, 0.4)) { dist = this.camDist * f * 0.85; break; }
-    }
-    out.set(
-      this.x - Math.sin(this.camYaw) * Math.cos(this.camPitch) * dist,
-      2.2 + Math.sin(this.camPitch) * dist,
-      this.z - Math.cos(this.camYaw) * Math.cos(this.camPitch) * dist);
-    return out;
-  }
-  lookAt() { return new THREE.Vector3(this.x, 1.6, this.z); }
+}
+
+export function tryEnterVehicle(S) {
+  const p = S.player;
+  if (!p.onFoot) return false;
+  const v = nearestVehicle(S, p.x, p.z, 4.5);
+  if (!v) { S.toast && S.toast('Tidak ada mobil di dekat sini — cari mobil parkir di tepi jalan.'); return false; }
+  p.onFoot = false;
+  p.vehicle = v;
+  v.isPlayer = true;
+  v.driver = p;
+  S.playerVehicle = v;
+  p.mesh.visible = false;
+  S.addWanted && S.addWanted(v.parked ? 0 : 1, 'mencuri mobil');
+  if (!v.parked) S.setDanger && S.setDanger(v.x, v.z, 18, 3); // sopir kabur panik
+  v.parked = false;
+  S.toast && S.toast(v.kind === 'taxi' ? 'Taksi dibajak! Pelanggan kabur.' : 'Mobil dicuri — polisi mungkin melihatmu.');
+  S.audio && S.audio.honk && S.audio.honk();
+  return true;
+}
+
+export function exitVehicle(S) {
+  const p = S.player;
+  if (p.onFoot || !p.vehicle) return;
+  const v = p.vehicle;
+  v.speed = 0;
+  v.isPlayer = false;
+  v.driver = null;
+  p.onFoot = true;
+  p.vehicle = null;
+  S.playerVehicle = null;
+  p.x = v.x + Math.sin(v.angle + Math.PI / 2) * 2.2;
+  p.z = v.z + Math.cos(v.angle + Math.PI / 2) * 2.2;
+  p.angle = v.angle;
+  p.mesh.visible = true;
+  p.mesh.position.set(p.x, 0, p.z);
 }

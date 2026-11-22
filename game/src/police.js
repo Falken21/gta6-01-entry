@@ -1,68 +1,103 @@
 // Costa Serena — police.js
-// Wanted stars 1–5: crimes raise them, police cars spawn at the edges and
-// pursue with ramming behaviour; breaking line of sight starts a cooldown,
-// then stars drain. Heat also rises when a mission demands it.
-import { Car } from './vehicles.js';
-import { WANTED, clamp } from './config.js';
+// Sistem wanted 1–5 bintang: kejahatan menaikkan bintang, mobil polisi spawn
+// di tepi kota dan mengejar dengan perilaku menabrak/menjepit, lampu strobo
+// merah-biru memantul di jalan, dan sirene. Putus garis pandang + menjauh
+// memulai cooldown — bersembunyi dan bintang perlahan turun.
+import { CFG, clamp, dist2, makeRng } from './config.js';
+import { makeVehicle, driveVehicle } from './vehicles.js';
 
-export class Police {
-  constructor(scene, city) {
-    this.scene = scene; this.city = city;
-    this.stars = 0; this.heat = 0; // heat 0..5 fractional
-    this.cars = [];
-    this.cooldown = 0; this.spawnTimer = 0;
-    this.onCrime = null; // callback(level, reason)
-  }
-  get level() { return Math.round(this.heat); }
-  addCrime(amount, reason) {
-    this.heat = clamp(this.heat + amount, 0, WANTED.maxStars);
-    this.stars = this.level;
-    this.cooldown = WANTED.decayDelay;
-    if (this.onCrime) this.onCrime(this.level, reason);
-  }
-  setLevel(n) { this.heat = n; this.stars = n; this.cooldown = WANTED.decayDelay; }
-  spawnCar(x, z) {
-    const car = new Car(this.scene, 'police', 0xf2f2f2, x, z, 0);
-    car.isPolice = true;
-    this.cars.push(car);
-    return car;
-  }
-  update(dt, t, targetPos, targetSpeed, losBlocked) {
-    this.stars = this.level;
-    const want = Math.min(this.level, 4);
-    // spawn / despawn to match wanted level
-    this.spawnTimer -= dt;
-    if (this.cars.length < want && this.spawnTimer <= 0) {
-      this.spawnTimer = 2.5;
-      const a = Math.random() * Math.PI * 2;
-      this.spawnCar(targetPos.x + Math.sin(a) * 70, targetPos.z + Math.cos(a) * 70);
+export function createPolice(S) {
+  S.wanted = 0;
+  S.wantedHeat = 0; // 0..1, memanas saat terlihat polisi
+  S.police = [];
+  S.policeCooldown = 0;
+  S.addWanted = (n, reason) => {
+    if (S.mode !== 'playing') return;
+    S.wanted = clamp(S.wanted + n, 0, CFG.wantedMax);
+    if (n > 0) {
+      S.wantedHeat = 1;
+      S.policeCooldown = 0;
+      S.toast && S.toast(reason ? `Wanted naik! ${reason}` : 'Wanted naik!');
+      S.hudFlash && S.hudFlash();
     }
-    if (this.cars.length > want) {
-      const c = this.cars.pop(); c.dispose();
+  };
+}
+
+export function updatePolice(S, THREE, dt) {
+  const px = S.player.onFoot ? S.player.x : (S.playerVehicle ? S.playerVehicle.x : S.player.x);
+  const pz = S.player.onFoot ? S.player.z : (S.playerVehicle ? S.playerVehicle.z : S.player.z);
+  const rng = S._policeRng || (S._policeRng = makeRng(CFG.seed + 55));
+  // jumlah polisi aktif mengikuti bintang
+  const wantCount = S.wanted >= 1 ? Math.min(1 + Math.floor(S.wanted / 2), 4) : 0;
+  while (S.police.length < wantCount) {
+    const sp = S.spawns.police[S.police.length % S.spawns.police.length];
+    const v = makeVehicle(S, THREE, 'police', sp[0] + rng.range(-10, 10), sp[1] + rng.range(-10, 10), 0);
+    v.cruise = CFG.policeMaxSpeed;
+    v.pursuitSide = (S.police.length % 2 === 0 ? 1 : -1) * 6;
+    S.police.push(v);
+  }
+  while (S.police.length > wantCount) {
+    const v = S.police[S.police.length - 1];
+    if (v.isPlayer) break; // jangan hapus mobil polisi yang sedang dikemudikan pemain
+    S.police.pop();
+    S.scene.remove(v.mesh);
+    const i = S.vehicles.indexOf(v);
+    if (i >= 0) S.vehicles.splice(i, 1);
+  }
+  // cooldown: bila pemain jauh dari semua polisi, bintang turun perlahan
+  let nearestD = 1e9;
+  for (const v of S.police) nearestD = Math.min(nearestD, dist2(v.x, v.z, px, pz));
+  if (S.wanted > 0 && nearestD > 70) {
+    S.policeCooldown += dt;
+    if (S.policeCooldown > 6) {
+      S.wanted = Math.max(0, S.wanted - dt * 0.12);
+      if (S.wanted < 0.5) { S.wanted = 0; S.toast && S.toast('Kamu berhasil bersembunyi — wanted hilang.'); }
     }
-    // cooldown: hide (line of sight blocked) and stars drain
-    if (this.level > 0) {
-      if (losBlocked) this.cooldown -= dt; else this.cooldown = WANTED.decayDelay;
-      if (this.cooldown <= 0) this.heat = Math.max(0, this.heat - WANTED.decayRate * dt);
+  } else {
+    S.policeCooldown = 0;
+  }
+  // kejar: bidik titik di samping pemain (mengepung, bukan menumpuk di
+  // satu titik) — offset mengecil saat dekat supaya tetap bisa menabrak
+  const t = S.now * 6;
+  for (const v of S.police) {
+    const d = dist2(v.x, v.z, px, pz);
+    const side = v.pursuitSide !== undefined ? v.pursuitSide : 0;
+    const off = side * clamp(d / 25, 0.25, 1);
+    const wantAngle = Math.atan2((px + off) - v.x, pz - v.z);
+    let diff = wantAngle - v.angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    v.angle += clamp(diff, -1.9 * dt, 1.9 * dt);
+    const targetSpeed = d > 26 ? CFG.policeMaxSpeed : (d > 8 ? 22 : 12);
+    v.speed += clamp(targetSpeed - v.speed, -14 * dt, 9 * dt);
+    v.x += Math.sin(v.angle) * v.speed * dt;
+    v.z += Math.cos(v.angle) * v.speed * dt;
+    const probe = { x: v.x, z: v.z };
+    S.resolveColliders(probe, 1.6);
+    v.x = probe.x; v.z = probe.z;
+    // menabrak pemain: damage + dorongan
+    if (d < 3.2) {
+      if (S.playerVehicle) {
+        S.playerVehicle.speed *= 0.55;
+        S.playerVehicle.damage = clamp(S.playerVehicle.damage + 0.08, 0, 1);
+        S.onCollision && S.onCollision(8);
+      } else if (S.player.health > 0) {
+        S.player.health = Math.max(0, S.player.health - 18 * dt);
+      }
+      v.speed *= 0.5;
     }
-    // pursuit: steer toward target, ram when close
-    for (const car of this.cars) {
-      const dx = targetPos.x - car.group.position.x, dz = targetPos.z - car.group.position.z;
-      const d = Math.hypot(dx, dz) || 1;
-      const wantHeading = Math.atan2(dx, dz);
-      let dh = wantHeading - car.heading;
-      while (dh > Math.PI) dh -= Math.PI * 2;
-      while (dh < -Math.PI) dh += Math.PI * 2;
-      const steer = clamp(dh * 1.4, -1, 1);
-      const throttle = d > 6 ? 1 : 0.6;
-      car.update(dt, { throttle, steer, brake: d < 3.5 }, t);
-      // ramming contact slows the target car (handled by main via distance check)
-      car.ramDist = d;
+    v.mesh.position.set(v.x, 0, v.z);
+    v.mesh.rotation.y = v.angle;
+    v.wheelSpin += (v.speed / 0.36) * dt;
+    for (const w of v.mesh.userData.wheels) w.spin.rotation.y = v.wheelSpin;
+    // strobo merah-biru bergantian
+    const lb = v.mesh.userData.lightbar;
+    if (lb) {
+      const on = Math.sin(t) > 0;
+      lb.red.emissiveIntensity = on ? 3 : 0.15;
+      lb.blue.emissiveIntensity = on ? 0.15 : 3;
     }
   }
-  clear() {
-    for (const c of this.cars) c.dispose();
-    this.cars = []; this.heat = 0; this.stars = 0;
-  }
-  setNight(n) { for (const c of this.cars) c.setNight(n); }
+  // sirene mengikuti jarak polisi terdekat
+  if (S.audio && S.audio.setSiren) S.audio.setSiren(S.police.length > 0 ? clamp(1 - nearestD / 120, 0.1, 1) : 0);
 }

@@ -1,62 +1,79 @@
-# Costa Serena — Kota Pesisir yang Hidup
+# Costa Serena — Open-World Crime Game
 
 [![gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
 [![Rank](https://make.fun/badge/gta6-01/Falken21/gta6-01-entry/rank.svg)](https://make.fun/bounty/gta6-01)
 [![Reward](https://make.fun/badge/gta6-01/Falken21/gta6-01-entry/reward.svg)](https://make.fun/bounty/gta6-01)
 
-Game open-world kriminal 3D orisinal untuk bounty make.fun **gta6-01** — "Make GTA 6".
-Bukan tiruan GTA: semua nama, karakter, dan cerita adalah ciptaan sendiri.
+Entry **make.fun gta6-01** — game kriminal open-world 3D original berbahasa Indonesia,
+dibangun dengan three.js (tanpa aset eksternal: semua tekstur, suara, dan musik
+disintesis prosedural di dalam game).
 
 ## Cerita
 
-Rafi, montir kapal di kota pesisir **Costa Serena**, harus melunasi utang kakaknya —
-satu misi demi satu misi, dari antar paket di marina sampai pelarian terakhir ke kapal.
+**Rafi**, mekanik kapal yang kakaknya berutang pada orang yang salah, harus
+menyelesaikan lima misi melintasi kota pesisir **Costa Serena**: antar paket ke
+marina, kabur dari kejaran polisi, taksi kilat, balap pantai, dan pelarian terakhir.
+Curi mobil, hindari bintang wanted, dan kejar bonus objektif sekunder di tiap misi.
 
-## Yang bisa dimainkan
+## Yang ada di dalam game
 
-- **Kota hidup**: grid pusat kota, marina dengan air beranimasi dan kapal bergoyang,
-  pantai berpasir, palem bergoyang, lalu lintas yang menjaga jalur, pejalan kaki
-  yang **panik dan lari** saat ada tembakan, tabrakan, atau kejaran polisi.
-- **Mobil**: curi mobil parkir atau mobil yang berhenti (E), menyetir dengan fisika
-  berbobot — akselerasi, rem tangan, body roll, roda berbelok & berputar, lampu rem,
-  lampu depan malam hari, asap kerusakan.
-- **Polisi**: wanted 1–5 bintang, mobil polisi mengejar dan menabrak, bersembunyi
-  di balik gedung untuk menurunkan bintang.
-- **Misi**: 5 misi cerita berantai + kegiatan sampingan (taksi, balapan, paket kilat).
-  Setiap misi punya **objektif sekunder dengan bonus cash**.
-- **Radio prosedural** saat menyetir (R ganti stasiun) — synth WebAudio, tanpa aset.
-- **Cuaca & waktu**: golden hour, siklus hari, hujan 3D sungguhan (partikel jatuh +
-  cipratan + jalan basah mengilap), langit bergradasi, awan, kabut jarak.
-- **Visual**: shadow map, ACES tone mapping, tekstur prosedural (aspal aus, fasad
-  gedung berjendela menyala, trotoar, pasir, zebra cross), kamera sinematik.
+- **Kota hidup**: grid jalan dengan marka dan zebra cross, gedung berfasad dengan
+  jendela menyala di malam hari, palem bergoyang, marina dengan perahu yang
+  mengapung, pantai berpasir, dan laut beranimasi.
+- **Lalu lintas & pejalan kaki**: mobil sipil menjaga jalur dan jarak, sopir kabur
+  saat mobilnya dicuri; pejalan kaki berartikulasi yang **panik dan lari** saat ada
+  tembakan, tabrakan, atau kejaran polisi di dekatnya.
+- **Kendaraan multi-bagian**: kabin berkaca, roda berputar dan membelok, lampu rem
+  dan lampu depan, body roll/pitch, asap kerusakan — bukan kotak kaku.
+- **Polisi & wanted 1–5 bintang**: mobil polisi mengejar dan menabrak, strobo
+  merah-biru, sirene mengikuti jarak; bersembunyi cukup lama menurunkan bintang.
+- **Misi + sampingan**: 5 misi cerita berpenanda suar, timer, dan **objektif
+  sekunder + bonus cash** (tanpa tabrakan, di bawah waktu target, mobil mulus).
+- **Cuaca & siklus hari**: golden hour, siang, malam, dan hujan dengan partikel
+  3D, angin, serta **jalan basah yang memantulkan cahaya**.
+- **Suara synth**: deru mesin mengikuti RPM, sirene, klakson, tembakan, dan
+  **radio prosedural** yang hanya berbunyi saat menyetir (M untuk bisu).
+- **HUD lengkap**: bintang wanted, kesehatan, cash, objektif + jarak, kecepatan,
+  dan minimap hidup (jalan, pemain, polisi, penanda misi). Progres tersimpan
+  otomatis di localStorage.
 
 ## Kontrol
 
 | Tombol | Aksi |
 | --- | --- |
 | WASD / panah | Jalan / menyetir |
+| E | Masuk & keluar mobil (curi mobil parkir) |
+| F / klik mouse | Tembak (jalan kaki) |
 | Shift | Lari |
-| E | Masuk / keluar mobil (curi mobil) |
-| F / klik | Tembak |
-| Spasi | Pukul / rem tangan |
-| M | Mulai misi berikutnya |
-| 1 / 2 / 3 | Taksi / balapan / paket kilat |
-| R | Ganti stasiun radio |
-| N | Bisu |
-| P / Esc | Jeda |
+| Spasi | Rem tangan |
+| Drag mouse | Orbit kamera |
+| P / Esc | Jeda / lanjut |
+| M | Bisu / hidupkan suara |
+| Enter | Mulai misi |
+| R | Ulang setelah game over |
 
 ## Cara main
 
-Buka `game/index.html` di desktop Chrome — tanpa server, tanpa jaringan.
-Progres misi dan kas tersimpan di localStorage.
+Sajikan `game/` dengan server statis apa pun, lalu buka `game/index.html` di
+desktop Chrome. Tanpa permintaan jaringan saat bermain — semua yang dimuat
+adalah berkas di bawah `game/`.
 
-## Struktur kode (`game/src/`)
+```bash
+cd game && python3 -m http.server 8123
+# buka http://127.0.0.1:8123/index.html
+```
 
-Satu berkas, satu tugas: `config`, `city`, `textures`, `traffic`, `pedestrians`,
-`player`, `vehicles`, `police`, `combat`, `missions`, `hud`, `audio`, `weather`,
-`save`, `main`. Three.js dipakai sebagai satu build modul vendored
-(`game/vendor/three.module.min.js`).
+Mode screenshot deterministik: `?shot=chase|walk|coast|night&seed=<n>`.
 
-## Lisensi
+## Struktur kode (`game/src/`, satu berkas satu tugas)
 
-Lihat `LICENSE`.
+`config.js` konstanta & RNG · `textures.js` tekstur prosedural · `city.js` kota &
+collider · `vehicles.js` model & fisika mobil · `traffic.js` lalu lintas &
+mobil parkir · `pedestrians.js` pejalan kaki & kepanikan · `player.js` kontrol
+Rafi · `police.js` wanted & pengejaran · `combat.js` tembakan · `missions.js`
+rantai misi & bonus · `hud.js` HUD & minimap · `audio.js` suara & radio synth ·
+`weather.js` siklus hari, hujan & jalan basah · `save.js` penyimpanan ·
+`main.js` boot, loop & kamera.
+
+Semua nama, karakter, tempat, dan cerita adalah karya original — bukan dari
+franchise game mana pun.

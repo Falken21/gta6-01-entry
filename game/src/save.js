@@ -1,23 +1,33 @@
 // Costa Serena — save.js
-// localStorage: mission progress, cash, settings. Corrupt data is discarded,
-// never crashes the boot.
-const KEY = 'costa-serena-save-v1';
-export class Save {
-  constructor() {
-    this.data = { cash: 0, missionIndex: 0, muted: false, bestCash: 0 };
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') this.data = { ...this.data, ...parsed };
-      }
-    } catch (e) { /* corrupt save: start fresh */ }
+// Progres tersimpan di localStorage: misi, cash, dan pengaturan suara.
+// Semua akses dibungkus try/catch — penyimpanan yang rusak tidak boleh
+// merusak permainan.
+import { CFG } from './config.js';
+
+export function loadSave() {
+  try {
+    const raw = localStorage.getItem(CFG.saveKey);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (typeof data !== 'object' || !data) return null;
+    return data;
+  } catch (e) {
+    return null;
   }
-  write() {
-    try {
-      this.data.bestCash = Math.max(this.data.bestCash || 0, this.data.cash || 0);
-      localStorage.setItem(KEY, JSON.stringify(this.data));
-    } catch (e) { /* storage full/blocked: play on without saving */ }
+}
+
+export function saveGameState(S) {
+  try {
+    const data = {
+      version: 1,
+      missionIndex: S.missionIndex || 0,
+      cash: Math.floor(S.player.cash || 0),
+      muted: !!(S.audio && S.audio.muted),
+      savedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(CFG.saveKey, JSON.stringify(data));
+    return true;
+  } catch (e) {
+    return false;
   }
-  reset() { this.data = { cash: 0, missionIndex: 0, muted: false, bestCash: 0 }; this.write(); }
 }

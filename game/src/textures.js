@@ -1,105 +1,130 @@
 // Costa Serena — textures.js
-// Procedural canvas textures only (no external assets): worn asphalt with lane
-// markings, building facades with lit windows, pavements, sand, crosswalks.
-import * as THREE from '../vendor/three.module.min.js';
-import { mulberry32 } from './config.js';
+// Semua tekstur dibuat prosedural di canvas (tanpa aset eksternal): aspal aus,
+// fasad gedung dengan jendela menyala, trotoar, pasir, dan air. Tekstur, bukan
+// warna datar, yang membawa realisme — sesuai Lane D image-craft.
+import { CFG, makeRng } from './config.js';
 
-function canvasTex(w, h, draw, repeatX = 1, repeatY = 1) {
-  const c = document.createElement('canvas'); c.width = w; c.height = h;
-  draw(c.getContext('2d'), w, h);
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeatX, repeatY);
-  t.anisotropy = 4; t.colorSpace = THREE.SRGBColorSpace;
-  return t;
+function canvasTexture(THREE, size, draw, repeatX = 1, repeatY = 1) {
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  draw(c.getContext('2d'), size);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeatX, repeatY);
+  tex.anisotropy = 4;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
-export function asphaltTexture() {
-  return canvasTex(256, 256, (g, w, h) => {
-    const r = mulberry32(11);
-    g.fillStyle = '#33343a'; g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 2600; i++) {
-      const v = 40 + r() * 40;
-      g.fillStyle = `rgb(${v | 0},${v | 0},${(v + 6) | 0})`;
-      g.fillRect(r() * w, r() * h, 2, 2);
-    }
-    for (let i = 0; i < 14; i++) {
-      g.fillStyle = 'rgba(20,20,24,0.25)';
-      g.beginPath(); g.ellipse(r() * w, r() * h, 12 + r() * 30, 6 + r() * 14, r() * 3, 0, 7); g.fill();
-    }
-    g.strokeStyle = 'rgba(15,15,18,0.5)'; g.lineWidth = 1;
-    for (let i = 0; i < 8; i++) {
-      g.beginPath(); let x = r() * w, y = r() * h; g.moveTo(x, y);
-      for (let j = 0; j < 4; j++) { x += (r() - 0.5) * 40; y += (r() - 0.5) * 40; g.lineTo(x, y); }
-      g.stroke();
-    }
-    g.fillStyle = '#d8c95a';
-    for (let y = 0; y < h; y += 32) g.fillRect(w / 2 - 2, y, 4, 18);
-  }, 1, 8); // one centre dash across the road, dashed along its length
+function speckle(ctx, size, rng, n, colors, aMin, aMax, sMax) {
+  for (let i = 0; i < n; i++) {
+    ctx.globalAlpha = aMin + rng.next() * (aMax - aMin);
+    ctx.fillStyle = colors[Math.floor(rng.next() * colors.length)];
+    const s = 1 + rng.next() * sMax;
+    ctx.fillRect(rng.next() * size, rng.next() * size, s, s);
+  }
+  ctx.globalAlpha = 1;
 }
 
-export function facadeTexture(base, litRatio, seed) {
-  return canvasTex(256, 256, (g, w, h) => {
-    const r = mulberry32(seed);
-    g.fillStyle = base; g.fillRect(0, 0, w, h);
-    const grad = g.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, 'rgba(255,255,255,0.08)'); grad.addColorStop(1, 'rgba(0,0,0,0.28)');
-    g.fillStyle = grad; g.fillRect(0, 0, w, h);
-    const cols = 6, rows = 10, cw = w / cols, ch = h / rows;
-    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
-      const lit = r() < litRatio;
-      g.fillStyle = lit ? (r() < 0.7 ? '#ffd98a' : '#9fd4ff') : '#20242e';
-      g.fillRect(x * cw + 5, y * ch + 6, cw - 10, ch - 12);
-      g.fillStyle = 'rgba(255,255,255,0.12)';
-      g.fillRect(x * cw + 5, y * ch + 6, cw - 10, 3);
-    }
-  });
-}
+export function buildTextures(THREE) {
+  const rng = makeRng(CFG.seed + 77);
 
-export function pavementTexture() {
-  return canvasTex(256, 256, (g, w, h) => {
-    const r = mulberry32(23);
-    g.fillStyle = '#8d8578'; g.fillRect(0, 0, w, h);
-    g.strokeStyle = 'rgba(60,55,45,0.6)'; g.lineWidth = 2;
+  // Aspal aus: dasar gelap + bintik keausan + retakan halus + marka pudar.
+  const asphalt = canvasTexture(THREE, 512, (ctx, s) => {
+    ctx.fillStyle = '#33343a'; ctx.fillRect(0, 0, s, s);
+    speckle(ctx, s, rng, 5200, ['#2a2b30', '#3d3e45', '#45464d', '#232428'], 0.12, 0.5, 3);
+    ctx.strokeStyle = 'rgba(20,20,22,0.55)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 26; i++) {
+      ctx.beginPath();
+      let x = rng.next() * s, y = rng.next() * s;
+      ctx.moveTo(x, y);
+      for (let j = 0; j < 4; j++) { x += rng.range(-26, 26); y += rng.range(-26, 26); ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+    // marka jalan pudar di tengah (dipakai berulang di jalur lurus)
+    ctx.fillStyle = 'rgba(230,220,170,0.75)';
+    for (let y = 0; y < s; y += 64) ctx.fillRect(s / 2 - 4, y + 8, 8, 34);
+  }, 8, 8);
+
+  // Trotoar: ubin beton dengan nat dan noda.
+  const sidewalk = canvasTexture(THREE, 512, (ctx, s) => {
+    ctx.fillStyle = '#8f8a7c'; ctx.fillRect(0, 0, s, s);
+    speckle(ctx, s, rng, 2600, ['#7d786c', '#9d9787', '#6e695e'], 0.15, 0.45, 3);
+    ctx.strokeStyle = 'rgba(60,58,50,0.6)'; ctx.lineWidth = 2;
     for (let i = 0; i <= 4; i++) {
-      g.beginPath(); g.moveTo(i * 64, 0); g.lineTo(i * 64, h); g.stroke();
-      g.beginPath(); g.moveTo(0, i * 64); g.lineTo(w, i * 64); g.stroke();
-    }
-    for (let i = 0; i < 900; i++) {
-      const v = 120 + r() * 40;
-      g.fillStyle = `rgba(${v | 0},${(v - 8) | 0},${(v - 20) | 0},0.5)`;
-      g.fillRect(r() * w, r() * h, 2, 2);
-    }
-  }, 6, 6);
-}
-
-export function sandTexture() {
-  return canvasTex(256, 256, (g, w, h) => {
-    const r = mulberry32(31);
-    g.fillStyle = '#d9c08a'; g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 3200; i++) {
-      const v = 190 + r() * 50;
-      g.fillStyle = `rgba(${v | 0},${(v - 25) | 0},${(v - 80) | 0},0.6)`;
-      g.fillRect(r() * w, r() * h, 2, 1);
+      ctx.beginPath(); ctx.moveTo((i * s) / 4, 0); ctx.lineTo((i * s) / 4, s); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, (i * s) / 4); ctx.lineTo(s, (i * s) / 4); ctx.stroke();
     }
   }, 10, 10);
-}
 
-export function crosswalkTexture() {
-  return canvasTex(128, 128, (g, w, h) => {
-    g.fillStyle = '#33343a'; g.fillRect(0, 0, w, h);
-    g.fillStyle = '#e8e6da';
-    for (let x = 8; x < w; x += 24) g.fillRect(x, 6, 12, h - 12);
-  });
-}
-
-export function waterSparkleTexture() {
-  return canvasTex(128, 128, (g, w, h) => {
-    const r = mulberry32(47);
-    g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 500; i++) {
-      const v = 90 + r() * 80;
-      g.fillStyle = `rgb(${v | 0},${v | 0},${v | 0})`;
-      g.beginPath(); g.arc(r() * w, r() * h, 1 + r() * 3, 0, 7); g.fill();
+  // Pasir pantai: butiran hangat + garis ombak tipis.
+  const sand = canvasTexture(THREE, 512, (ctx, s) => {
+    ctx.fillStyle = '#d9c08a'; ctx.fillRect(0, 0, s, s);
+    speckle(ctx, s, rng, 6000, ['#c8a86a', '#e8d5a0', '#b89a5e', '#efe0b0'], 0.15, 0.5, 2);
+    ctx.strokeStyle = 'rgba(255,250,230,0.35)'; ctx.lineWidth = 3;
+    for (let i = 0; i < 7; i++) {
+      ctx.beginPath();
+      ctx.moveTo(0, rng.next() * s);
+      ctx.bezierCurveTo(s * 0.3, rng.next() * s, s * 0.7, rng.next() * s, s, rng.next() * s);
+      ctx.stroke();
     }
   }, 6, 6);
+
+  // Fasad gedung: grid jendela + variasi lantai; peta emissive terpisah
+  // (jendela menyala hangat saat malam) dibuat dari seed yang sama.
+  function facadePair(base, litRatio) {
+    const lit = [];
+    const color = canvasTexture(THREE, 256, (ctx, s) => {
+      ctx.fillStyle = base; ctx.fillRect(0, 0, s, s);
+      speckle(ctx, s, rng, 700, ['rgba(0,0,0,0.18)', 'rgba(255,255,255,0.10)'], 0.2, 0.6, 2);
+      const cols = 6, rows = 10, ww = s / cols, hh = s / rows;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const isLit = rng.next() < litRatio;
+          lit.push(isLit);
+          ctx.fillStyle = isLit ? '#ffd88a' : '#20242c';
+          ctx.fillRect(c * ww + 5, r * hh + 6, ww - 10, hh - 12);
+          ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 2;
+          ctx.strokeRect(c * ww + 5, r * hh + 6, ww - 10, hh - 12);
+        }
+      }
+    });
+    const emissive = canvasTexture(THREE, 256, (ctx, s) => {
+      ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, s, s);
+      const cols = 6, rows = 10, ww = s / cols, hh = s / rows;
+      let k = 0;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (lit[k++]) { ctx.fillStyle = '#ffbe55'; ctx.fillRect(c * ww + 5, r * hh + 6, ww - 10, hh - 12); }
+        }
+      }
+    });
+    return { color, emissive };
+  }
+  const facades = [
+    facadePair('#c9a06a', 0.34), facadePair('#9fb4c0', 0.30),
+    facadePair('#b98a7a', 0.36), facadePair('#d8cdb4', 0.28),
+    facadePair('#7e9aa8', 0.32), facadePair('#a88f6d', 0.30),
+  ];
+
+  // Air marina: dasar biru-hijau dengan kilau gelombang halus.
+  const water = canvasTexture(THREE, 256, (ctx, s) => {
+    const g = ctx.createLinearGradient(0, 0, s, s);
+    g.addColorStop(0, '#2a8ab0'); g.addColorStop(0.5, '#1d6f8e'); g.addColorStop(1, '#0e4a66');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = 2;
+    for (let i = 0; i < 40; i++) {
+      const y = rng.next() * s, x = rng.next() * s, w = 12 + rng.next() * 30;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + w / 2, y - 4, x + w, y); ctx.stroke();
+    }
+  }, 6, 6);
+
+  // Zebra cross: dipakai sebagai strip di persimpangan.
+  const crosswalk = canvasTexture(THREE, 256, (ctx, s) => {
+    ctx.fillStyle = '#33343a'; ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = 'rgba(235,232,215,0.9)';
+    for (let i = 0; i < 6; i++) ctx.fillRect(8 + i * 42, 10, 22, s - 20);
+  });
+
+  return { asphalt, sidewalk, sand, water, crosswalk, facades };
 }

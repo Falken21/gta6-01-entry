@@ -1,96 +1,108 @@
 // Costa Serena — missions.js
-// Story chain (5 missions) + repeatable side activities (taxi fares, street
-// races, package pickups). Checkpoints, timers, cash rewards, and a SECONDARY
-// objective with bonus cash on every mission (Gemini critique fix).
-// Progress + cash persist via save.js.
-import { MISSIONS, dist2d } from './config.js';
+// Rantai cerita 5 misi Rafi + aktivitas sampingan yang bisa diulang (taksi,
+// balap pantai, antar paket). Tiap misi punya objektif utama, penanda suar
+// 3D, timer opsional, dan OBJEKTIF SEKUNDER dengan bonus cash: selesaikan
+// tanpa kerusakan / di bawah waktu target.
+import { CFG, clamp, dist2, makeRng } from './config.js';
 
-const SPOTS = {
-  marina: { x: -150, z: -140, label: 'Dermaga Marina' },
-  hotel: { x: 60, z: -60, label: 'Hotel Riviera' },
-  beach: { x: 40, z: 235, label: 'Pantai Serena' },
-  warehouse: { x: -120, z: 120, label: 'Gudang Tua' },
-  plaza: { x: 0, z: 0, label: 'Plaza Serena' },
-  pier: { x: -150, z: -100, label: 'Kapal Pelarian' },
-};
+const MISSIONS = [
+  { id: 1, name: 'Misi 1 — Paket untuk Marina', text: 'Antar paket ke dermaga marina selatan. Curi mobil dulu bila perlu.', target: { x: 120, z: 190 }, radius: 9, reward: 400, secondary: 'Tanpa tabrakan', bonus: 150 },
+  { id: 2, name: 'Misi 2 — Kabur dari Polisi', text: 'Polisi mengejarmu! Capai tempat persembunyian di barat kota.', target: { x: -150, z: -140 }, radius: 10, reward: 650, secondary: 'Lolos dengan wanted 3+', bonus: 200 },
+  { id: 3, name: 'Misi 3 — Taksi Kilat', text: 'Antar 2 penumpang taksi sebelum waktu habis. Penumpang menunggu di halte.', target: { x: 40, z: -80 }, radius: 8, reward: 500, secondary: 'Di bawah 90 detik', bonus: 150, timer: 150 },
+  { id: 4, name: 'Misi 4 — Balap Pantai', text: 'Balap menyusuri jalan pantai timur sampai garis finis.', target: { x: 150, z: -160 }, radius: 10, reward: 800, secondary: 'Di bawah 75 detik', bonus: 250, timer: 120 },
+  { id: 5, name: 'Misi 5 — Pelarian Terakhir', text: 'Bawa perahu? Tidak — bawa mobil ke marina dan kabur dari kejaran terakhir.', target: { x: 96, z: 196 }, radius: 9, reward: 1500, secondary: 'Tanpa kerusakan mobil', bonus: 400 },
+];
 
-export class Missions {
-  constructor(save, onEvent) {
-    this.save = save; this.onEvent = onEvent; // (type, payload)
-    this.index = save.data.missionIndex || 0;
-    this.active = null; this.side = null;
-    this.cash = save.data.cash || 0;
-    this.marker = null;
+export function createMissions(S, THREE) {
+  S.missions = MISSIONS;
+  S.missionIndex = 0;
+  S.mission = null;
+  S.missionState = 'idle'; // idle | active | done
+  S.side = { taxiDone: 0, racesWon: 0, packages: 0 };
+  // penanda suar: silinder cahaya + cincin di tanah
+  const beaconMat = new THREE.MeshBasicMaterial({ color: 0xffc020, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false });
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.4, 42, 20, 1, true), beaconMat);
+  beacon.visible = false;
+  S.scene.add(beacon);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(5.5, 7, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffc020, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.06;
+  ring.visible = false;
+  S.scene.add(ring);
+  S.missionBeacon = beacon;
+  S.missionRing = ring;
+  S.startMission = (i) => startMission(S, i);
+}
+
+export function startMission(S, i) {
+  const m = MISSIONS[i];
+  if (!m) { S.missionState = 'done'; S.toast && S.toast('Semua misi selesai! Costa Serena milikmu, Rafi.'); return; }
+  S.missionIndex = i;
+  S.mission = { ...m, elapsed: 0, hits: 0, startedWanted: S.wanted };
+  S.missionState = 'active';
+  S.missionBeacon.visible = true;
+  S.missionBeacon.position.set(m.target.x, 21, m.target.z);
+  S.missionRing.visible = true;
+  S.missionRing.position.set(m.target.x, 0.06, m.target.z);
+  S.toast && S.toast(`${m.name}: ${m.text}`);
+  if (i === 1) S.addWanted && S.addWanted(2, 'misi 2 dimulai');
+  if (i === 4) S.addWanted && S.addWanted(2, 'pelarian terakhir');
+}
+
+export function updateMissions(S, dt) {
+  if (S.missionState !== 'active' || !S.mission) return;
+  const m = S.mission;
+  m.elapsed += dt;
+  const px = S.player.onFoot ? S.player.x : (S.playerVehicle ? S.playerVehicle.x : S.player.x);
+  const pz = S.player.onFoot ? S.player.z : (S.playerVehicle ? S.playerVehicle.z : S.player.z);
+  // denyut penanda
+  const pulse = 0.5 + Math.sin(S.now * 4) * 0.3;
+  S.missionBeacon.material.opacity = 0.22 + pulse * 0.2;
+  S.missionRing.scale.setScalar(1 + Math.sin(S.now * 3) * 0.08);
+  // misi 3: penumpang kedua muncul setelah sampai di halte pertama
+  if (m.id === 3 && !m.stage2 && dist2(px, pz, m.target.x, m.target.z) < m.radius) {
+    m.stage2 = true;
+    m.target = { x: -120, z: 80 };
+    m.radius = 8;
+    S.missionBeacon.position.set(m.target.x, 21, m.target.z);
+    S.missionRing.position.set(m.target.x, 0.06, m.target.z);
+    S.toast && S.toast('Penumpang pertama diantar! Jemput penumpang kedua di barat kota.');
+    return;
   }
-  get current() { return MISSIONS[Math.min(this.index, MISSIONS.length - 1)]; }
-  get done() { return this.index >= MISSIONS.length; }
-  start() {
-    if (this.done) return null;
-    const m = this.current;
-    const targets = [SPOTS.marina, SPOTS.hotel, SPOTS.beach, SPOTS.warehouse, SPOTS.pier];
-    this.active = {
-      ...m, timeLeft: m.time, target: targets[m.id - 1],
-      collisions: 0, elapsed: 0, maxWanted: 0, startHealth: 100,
-    };
-    if (this.onEvent) this.onEvent('mission-start', this.active);
-    return this.active;
+  if (m.timer && m.elapsed > m.timer) {
+    S.toast && S.toast('Waktu habis! Misi diulang dari awal.');
+    startMission(S, S.missionIndex);
+    return;
   }
-  // side activities (repeatable, small cash)
-  startSide(kind) {
-    const defs = {
-      taxi: { name: 'Taksi: antar penumpang', reward: 80, time: 90, target: SPOTS.hotel },
-      race: { name: 'Balapan jalanan', reward: 150, time: 100, target: SPOTS.beach },
-      package: { name: 'Paket kilat', reward: 60, time: 75, target: SPOTS.plaza },
-    };
-    this.side = { ...defs[kind], kind, timeLeft: defs[kind].time, elapsed: 0 };
-    if (this.onEvent) this.onEvent('side-start', this.side);
-    return this.side;
-  }
-  noteCollision() { if (this.active) this.active.collisions++; }
-  update(dt, playerPos, wantedLevel, carHealth) {
-    const tick = (job) => {
-      if (!job) return null;
-      job.timeLeft -= dt; job.elapsed += dt;
-      if (job.maxWanted !== undefined) job.maxWanted = Math.max(job.maxWanted, wantedLevel);
-      const d = dist2d(playerPos.x, playerPos.z, job.target.x, job.target.z);
-      if (d < 7) return 'complete';
-      if (job.timeLeft <= 0) return 'failed';
-      return null;
-    };
-    let r = tick(this.active);
-    if (r) {
-      const job = this.active; this.active = null;
-      if (r === 'complete') this.complete(job, playerPos);
-      else if (this.onEvent) this.onEvent('mission-failed', job);
-      return r;
-    }
-    r = tick(this.side);
-    if (r) {
-      const job = this.side; this.side = null;
-      if (r === 'complete') {
-        this.cash += job.reward; this.save.data.cash = this.cash; this.save.write();
-        if (this.onEvent) this.onEvent('side-complete', job);
-      } else if (this.onEvent) this.onEvent('side-failed', job);
-      return r;
-    }
-    return null;
-  }
-  complete(job, playerPos) {
-    let bonus = 0, bonusWhy = '';
-    // secondary objective per mission
-    if (job.id === 1 && job.collisions === 0) { bonus = job.secondaryReward; bonusWhy = job.secondary; }
-    if (job.id === 2 && job.elapsed < job.time) { bonus = job.secondaryReward; bonusWhy = job.secondary; }
-    if (job.id === 3 && job.elapsed <= 90) { bonus = job.secondaryReward; bonusWhy = job.secondary; }
-    if (job.id === 4 && (job.maxWanted || 0) === 0) { bonus = job.secondaryReward; bonusWhy = job.secondary; }
-    if (job.id === 5 && job.startHealth >= 60) { bonus = job.secondaryReward; bonusWhy = job.secondary; }
-    this.cash += job.reward + bonus;
-    this.index = Math.min(this.index + 1, MISSIONS.length);
-    this.save.data.cash = this.cash; this.save.data.missionIndex = this.index; this.save.write();
-    if (this.onEvent) this.onEvent('mission-complete', { ...job, bonus, bonusWhy, cash: this.cash, next: this.index });
-  }
-  distanceToTarget(playerPos) {
-    const job = this.active || this.side;
-    if (!job) return null;
-    return { dist: dist2d(playerPos.x, playerPos.z, job.target.x, job.target.z), label: job.target.label, name: job.name, timeLeft: job.timeLeft };
+  if (dist2(px, pz, m.target.x, m.target.z) < m.radius) completeMission(S);
+}
+
+function completeMission(S) {
+  const m = S.mission;
+  let bonus = 0, bonusText = '';
+  // objektif sekunder + bonus cash
+  if (m.id === 1 && m.hits === 0) { bonus = m.bonus; bonusText = 'Bonus tanpa tabrakan!'; }
+  if (m.id === 2 && S.wanted >= 3) { bonus = m.bonus; bonusText = 'Bonus lolos dari kejaran besar!'; }
+  if (m.id === 3 && m.elapsed < 90) { bonus = m.bonus; bonusText = 'Bonus taksi kilat!'; }
+  if (m.id === 4 && m.elapsed < 75) { bonus = m.bonus; bonusText = 'Bonus balap pantai!'; }
+  if (m.id === 5 && (!S.playerVehicle || S.playerVehicle.damage < 0.3)) { bonus = m.bonus; bonusText = 'Bonus mobil mulus!'; }
+  const total = m.reward + bonus;
+  S.player.cash += total;
+  S.toast && S.toast(`Misi selesai! +$${total}${bonus ? ` (${bonusText} +$${bonus})` : ''}`);
+  S.audio && S.audio.cash && S.audio.cash();
+  S.missionBeacon.visible = false;
+  S.missionRing.visible = false;
+  S.missionState = 'idle';
+  S.mission = null;
+  S.saveGame && S.saveGame();
+  // misi berikutnya otomatis dimulai setelah jeda singkat
+  S._nextMissionAt = S.now + 2.5;
+}
+
+export function maybeStartNextMission(S) {
+  if (S.missionState === 'idle' && S._nextMissionAt && S.now >= S._nextMissionAt) {
+    S._nextMissionAt = 0;
+    startMission(S, S.missionIndex + 1);
   }
 }

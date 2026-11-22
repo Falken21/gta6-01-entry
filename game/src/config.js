@@ -1,30 +1,80 @@
 // Costa Serena — config.js
-// Single source of tuning constants. Fixed seed keeps screenshot mode deterministic.
-export const SEED = 20261119;
-export const WORLD = {
-  block: 46, road: 14, halfGrid: 3, // 7x7 blocks centred on origin
-  groundSize: 560, beachZ: 210, marinaX: -190,
+// Satu sumber kebenaran untuk konstanta, seed, dan helper matematika game.
+// Semua sistem lain mengimpor dari sini supaya tuning terpusat dan deterministik.
+export const CFG = {
+  seed: 20261122,
+  worldHalf: 210, // kota membentang -210..210 meter di x dan z
+  roadGap: 40, // jarak antar jalan pada grid kota
+  roadHalfWidth: 5,
+  walkSpeed: 4.2,
+  runSpeed: 7.5,
+  carAccel: 14,
+  carBrake: 26,
+  carMaxSpeed: 34,
+  carMaxReverse: 10,
+  carSteerMax: 0.55,
+  policeMaxSpeed: 37,
+  pedWalkSpeed: 1.4,
+  pedRunSpeed: 5.2,
+  gravity: 22,
+  playerHealthMax: 100,
+  wantedMax: 5,
+  missionReward: [400, 650, 500, 800, 1500],
+  sideBonus: 150,
+  saveKey: 'costa-serena-save-v1',
 };
-export const PLAYER = { walk: 4.2, run: 8.5, accel: 26, turn: 2.6, radius: 0.55, health: 100 };
-export const CAR = { accel: 17, brake: 30, reverse: 9, maxSpeed: 38, steerMax: 0.55, grip: 0.92 };
-export const WANTED = { decayDelay: 6, decayRate: 0.25, maxStars: 5 };
-export const MISSIONS = [
-  { id: 1, name: 'Antar Paket Marina', brief: 'Bawa paket ke dermaga marina sebelum waktu habis.', reward: 250, time: 150, secondary: 'Tanpa tabrakan: bonus $100', secondaryReward: 100 },
-  { id: 2, name: 'Taksi Tengah Malam', brief: 'Antar 2 penumpang ke hotel Riviera.', reward: 320, time: 200, secondary: 'Antar keduanya tanpa kerusakan berat: bonus $120', secondaryReward: 120 },
-  { id: 3, name: 'Balapan Pesisir', brief: 'Lewati 5 checkpoint di jalan pesisir.', reward: 450, time: 180, secondary: 'Selesaikan di bawah 90 detik: bonus $200', secondaryReward: 200 },
-  { id: 4, name: 'Utang Kakak', brief: 'Ambil tas uang di gudang, hindari polisi.', reward: 600, time: 220, secondary: 'Wanted tetap 0: bonus $250', secondaryReward: 250 },
-  { id: 5, name: 'Pelarian Terakhir', brief: 'Kabur ke kapal di marina dengan wanted 3.', reward: 900, time: 240, secondary: 'Sampai dengan mobil utuh (>60%): bonus $300', secondaryReward: 300 },
-];
-export const SHOT_SCENES = ['chase', 'walk', 'coast', 'night'];
+
+export const TAU = Math.PI * 2;
+
+export function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+export function lerp(a, b, t) { return a + (b - a) * t; }
+export function damp(a, b, lambda, dt) { return lerp(a, b, 1 - Math.exp(-lambda * dt)); }
+export function dist2(ax, az, bx, bz) { const dx = ax - bx, dz = az - bz; return Math.hypot(dx, dz); }
+export function angleLerp(a, b, t) {
+  let d = (b - a) % TAU;
+  if (d > Math.PI) d -= TAU;
+  if (d < -Math.PI) d += TAU;
+  return a + d * t;
+}
+export function angleDiff(a, b) {
+  let d = (b - a) % TAU;
+  if (d > Math.PI) d -= TAU;
+  if (d < -Math.PI) d += TAU;
+  return d;
+}
+
+// RNG deterministik (mulberry32) — screenshot mode memakai seed dari URL.
 export function mulberry32(seed) {
   let a = seed >>> 0;
-  return function () {
+  return function next() {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-export function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-export function lerp(a, b, t) { return a + (b - a) * t; }
-export function dist2d(ax, az, bx, bz) { return Math.hypot(ax - bx, az - bz); }
+
+export function makeRng(seed) {
+  const next = mulberry32(seed);
+  return {
+    next,
+    range(a, b) { return a + next() * (b - a); },
+    int(a, b) { return Math.floor(a + next() * (b - a + 1)); },
+    pick(arr) { return arr[Math.floor(next() * arr.length)]; },
+    chance(p) { return next() < p; },
+  };
+}
+
+export const PALETTE = {
+  asphalt: 0x2e2f33,
+  sidewalk: 0x8a8578,
+  sand: 0xd9c08a,
+  sea: 0x1d6f8e,
+  seaDeep: 0x0e4a66,
+  building: [0xc9a06a, 0xb98a7a, 0x9fb4c0, 0xd8cdb4, 0xa88f6d, 0x7e9aa8, 0xe0d3b8, 0x8fa3a0],
+  carPaint: [0xb02020, 0x2050b0, 0xe0c020, 0x20a080, 0xd0d0d0, 0x303030, 0x8040a0, 0xe07a20, 0x406080, 0x903030],
+  shirt: [0xd84a4a, 0x4a7ad8, 0x4ad87a, 0xe0c040, 0xffffff, 0x303030, 0xd88a4a, 0x8a4ad8, 0x40b0b0, 0xc0c0c0],
+  skin: [0xe8b98a, 0xc98a5a, 0x8a5a30, 0xf0c8a0, 0xa06a40],
+  palmTrunk: 0x7a5a38,
+  palmLeaf: 0x2e7a3a,
+};
